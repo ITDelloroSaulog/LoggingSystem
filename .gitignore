@@ -1,0 +1,10 @@
+# Import/extraction temp artifacts
+tmp*/
+tmp_*/
+tmp*.zip
+tmp*.txt
+
+# OS/editor noise
+Thumbs.db
+.DS_Store
+*.log
