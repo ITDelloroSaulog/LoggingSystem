@@ -1,5 +1,6 @@
 import { escapeHtml } from "../ui/escapeHtml.js";
 import { supabase } from "../supabaseClient.js";
+import { uiConfirm, uiPrompt } from "../ui/modal.js";
 
 const SUPER_ADMIN_ROLES = ["super_admin", "admin"];
 const GROUP_CODE_RE = /^[A-Z0-9_]{2,12}$/;
@@ -375,7 +376,11 @@ export async function renderAdminRates(appEl, ctx) {
         return;
       }
 
-      const ok = confirm(`Create rate ${payload.code} for P${peso(payload.amount)} (${payload.unit})?`);
+      const ok = await uiConfirm({
+        title: "Create Rate",
+        message: `Create rate ${payload.code} for P${peso(payload.amount)} (${payload.unit})?`,
+        confirmText: "Create",
+      });
       if (!ok) {
         msg.textContent = "Create cancelled.";
         return;
@@ -459,7 +464,15 @@ export async function renderAdminRates(appEl, ctx) {
       const currActive = tr.dataset.active === "1";
       const code = clean(tr.dataset.code);
       const next = !currActive;
-      if (!next && !confirm(`Disable rate "${code}"?`)) return;
+      if (!next) {
+        const ok = await uiConfirm({
+          title: "Disable Rate",
+          message: `Disable rate "${code}"?`,
+          confirmText: "Disable",
+          danger: true,
+        });
+        if (!ok) return;
+      }
       toggleBtn.disabled = true;
       msg.textContent = "Updating...";
       try {
@@ -482,7 +495,14 @@ export async function renderAdminRates(appEl, ctx) {
         return;
       }
 
-      const typed = prompt(`Type ${code} to permanently delete this rate:`, "");
+      const typed = await uiPrompt({
+        title: "Delete Rate",
+        message: `Type ${code} to permanently delete this rate.`,
+        label: "Rate code",
+        required: true,
+        confirmText: "Delete",
+        danger: true,
+      });
       if (typed !== code) {
         msg.textContent = "Delete cancelled.";
         return;

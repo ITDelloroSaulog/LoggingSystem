@@ -1,5 +1,6 @@
-﻿import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from "../supabaseClient.js";
+import { uiConfirm, uiPrompt } from "../ui/modal.js";
 
 const SUPER_ADMIN_ROLES = ["super_admin", "admin"];
 const ROLE_OPTIONS = ["staff_encoder", "lawyer", "accountant", "admin", "super_admin"];
@@ -276,10 +277,21 @@ export async function renderAdminUsers(appEl, ctx) {
           return;
         }
 
-        const ok = confirm(`Do you really want to delete ${email}? This cannot be undone.`);
+        const ok = await uiConfirm({
+          title: "Delete User",
+          message: `Do you really want to delete ${email}? This cannot be undone.`,
+          confirmText: "Delete",
+          danger: true,
+        });
         if (!ok) return;
 
-        const typed = prompt(`Second confirmation required. Type DELETE to remove ${email}.`, "");
+        const typed = await uiPrompt({
+          title: "Second Confirmation",
+          message: `Type DELETE to remove ${email}.`,
+          label: "Confirmation text",
+          required: true,
+          confirmText: "Continue",
+        });
         if (typed !== "DELETE") {
           msg.textContent = "Delete cancelled (confirmation text did not match).";
           return;

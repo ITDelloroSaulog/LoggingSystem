@@ -1,5 +1,6 @@
 import { supabase } from "../supabaseClient.js";
 import { escapeHtml } from "../ui/escapeHtml.js";
+import { uiConfirm } from "../ui/modal.js";
 
 const CONTRACT_TASK_CATEGORY = "contract_agreement";
 const DEFAULT_STORAGE_BUCKET = "receipts";
@@ -614,7 +615,13 @@ export async function renderContracts(appEl, ctx) {
     const tr = btn.closest("tr");
     if (!tr) return;
     if (tr.dataset.mode !== "contract") return;
-    if (!window.confirm("Delete this contract copy row?")) return;
+    const ok = await uiConfirm({
+      title: "Delete Contract Copy",
+      message: "Delete this contract copy row?",
+      confirmText: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
 
     const id = tr.dataset.id;
     const saveMsg = tr.querySelector(".save-msg");

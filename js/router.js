@@ -5,6 +5,7 @@ const routes = [
   { path: "#/dashboard", roles: STAFF_ROLES, modulePath: "./pages/dashboard.js", exportName: "renderDashboard" },
   { path: "#/tracker", roles: STAFF_ROLES, modulePath: "./pages/trackerHub.js", exportName: "renderTrackerHub" },
   { path: "#/activities", roles: STAFF_ROLES, modulePath: "./pages/logActivity.js", exportName: "renderLogActivity" },
+  { path: "#/prospects", roles: STAFF_ROLES, modulePath: "./pages/prospects.js", exportName: "renderProspects" },
   { path: "#/accounts", roles: STAFF_ROLES, modulePath: "./pages/accounts.js", exportName: "renderAccounts" },
   { path: "#/reports", roles: STAFF_ROLES, modulePath: "./pages/reports.js", exportName: "renderReports" },
   { path: "#/contracts", roles: STAFF_ROLES, modulePath: "./pages/contracts.js", exportName: "renderContracts" },

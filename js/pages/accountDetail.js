@@ -25,7 +25,7 @@ export async function renderAccountDetail(appEl, ctx, accountId) {
   // Load account
   const { data: account, error: aErr } = await supabase
     .from("accounts")
-    .select("id,title,category,status,created_at")
+    .select("id,title,category,account_kind,is_archived,status,created_at")
     .eq("id", accountId)
     .single();
 
@@ -36,7 +36,7 @@ export async function renderAccountDetail(appEl, ctx, accountId) {
 
   info.innerHTML = `
     <p><strong>${escapeHtml(account.title)}</strong></p>
-    <p class="muted">${escapeHtml(account.category)} - ${escapeHtml(account.status)}</p>
+    <p class="muted">${escapeHtml(account.category)} | ${escapeHtml(account.account_kind || "-")} - ${escapeHtml(account.is_archived ? "archived" : account.status)}</p>
     <p class="muted">ID: ${escapeHtml(account.id)}</p>
   `;
 

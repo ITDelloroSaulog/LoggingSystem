@@ -1,10 +1,13 @@
 import { supabase } from "../supabaseClient.js";
 import { escapeHtml } from "../ui/escapeHtml.js";
+import { EntryClass, TASK_TO_EXPENSE_TYPE, TASK_DISPLAY_LABEL } from "../domainTypes.js";
+import { uiAlert, uiConfirm } from "../ui/modal.js";
 
 // Excel-like, less confusing "Activities" entry.
 // Each filled row becomes a row in public.activities (draft/pending/etc).
 
 const RECEIPTS_BUCKET = "receipts";
+const ACTIVITY_PREFILL_KEY = "lfp.activity_prefill";
 const DEFAULT_ROWS = 1;
 const MAX_ROWS = 20;
 const HANDLING_LAWYER_ROLES = ["lawyer"];
@@ -12,20 +15,22 @@ const HANDLING_LAWYER_ROLES = ["lawyer"];
 // Core categories requested (organized UI only; keep underlying fee codes).
 // Receipt required by default for OPE expense categories (except man hour).
 const CATEGORIES = [
-  { value: "appearance_fee", label: "Appearance", fee_code: "AF", needs_receipt: false },
-  { value: "pleading_major", label: "Pleading", fee_code: "PF", needs_receipt: false },
-  { value: "notary_fee", label: "Notary", fee_code: "NF", needs_receipt: true },
-  { value: "ope_printing", label: "Printing", fee_code: "OPE", needs_receipt: true },
-  { value: "ope_envelope", label: "Envelope", fee_code: "OPE", needs_receipt: true },
-  { value: "ope_lbc", label: "LBC", fee_code: "OPE", needs_receipt: true },
-  { value: "ope_transpo", label: "Transpo", fee_code: "OPE", needs_receipt: true },
-  { value: "ope_manhours", label: "Man Hour", fee_code: "OPE", needs_receipt: false },
+  { value: "appearance_fee", label: "Appearance", fee_code: "AF", needs_receipt: false, group: "activity", line_kind: "activity" },
+  { value: "pleading_major", label: "Pleading", fee_code: "PF", needs_receipt: false, group: "activity", line_kind: "activity" },
+  { value: "meeting", label: "Meeting", fee_code: null, needs_receipt: false, group: "activity", line_kind: "activity" },
+  { value: "miscellaneous", label: "Miscellaneous", fee_code: null, needs_receipt: false, group: "activity", line_kind: "activity" },
+  { value: "notary_fee", label: "Notary", fee_code: "NF", needs_receipt: true, group: "ope", line_kind: "cost" },
+  { value: "ope_printing", label: "Printing", fee_code: "OPE", needs_receipt: true, group: "ope", line_kind: "cost" },
+  { value: "ope_envelope", label: "Envelope", fee_code: "OPE", needs_receipt: true, group: "ope", line_kind: "cost" },
+  { value: "ope_lbc", label: "Courier", fee_code: "OPE", needs_receipt: true, group: "ope", line_kind: "cost" },
+  { value: "ope_transpo", label: "Transpo", fee_code: "OPE", needs_receipt: true, group: "ope", line_kind: "cost" },
+  { value: "ope_manhours", label: "Man Hour", fee_code: "OPE", needs_receipt: false, group: "ope", line_kind: "cost" },
 ];
 
 const TEMPLATE_BUNDLES = [
   { key: "", label: "Add from Template..." },
   { key: "notary_print_env", label: "Notary + Printing + Envelope", rows: ["notary_fee", "ope_printing", "ope_envelope"] },
-  { key: "delivery", label: "Delivery bundle (LBC + Transpo)", rows: ["ope_lbc", "ope_transpo"] },
+  { key: "delivery", label: "Delivery bundle (Courier + Transpo)", rows: ["ope_lbc", "ope_transpo"] },
   { key: "court_appearance", label: "Court appearance (Appearance + Transpo + Printing)", rows: ["appearance_fee", "ope_transpo", "ope_printing"] },
 ];
 
@@ -80,6 +85,28 @@ function accountCategoryLabel(rawValue) {
   return fallback ? fallback.replace(/\b\w/g, (c) => c.toUpperCase()) : "";
 }
 
+function formatAccountPickerLabel(a) {
+  const archivedSuffix = a?.is_archived ? " | archived" : "";
+  const kind = cleanText(a?.account_kind);
+  return `${cleanText(a?.title) || "(untitled)"} (${accountCategoryLabel(a?.category) || "-"}${kind ? ` | ${kind}` : ""}${archivedSuffix})`;
+}
+
+function consumeActivityPrefill() {
+  try {
+    const raw = localStorage.getItem(ACTIVITY_PREFILL_KEY);
+    if (!raw) return null;
+    localStorage.removeItem(ACTIVITY_PREFILL_KEY);
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    return {
+      account_id: String(parsed.account_id || "").trim(),
+      matter_id: String(parsed.matter_id || "").trim(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function safeUuid() {
   if (typeof crypto?.randomUUID === "function") return crypto.randomUUID();
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (ch) => {
@@ -99,12 +126,54 @@ function parseAmount(raw) {
 
 function buildCategoryOptions() {
   const opts = [`<option value="">Select...</option>`];
-  for (const c of CATEGORIES) opts.push(`<option value="${c.value}">${escapeHtml(c.label)}</option>`);
+  const groups = [
+    { key: "activity", label: "Activity / Service" },
+    { key: "ope", label: "Cost / OPE" },
+  ];
+  for (const group of groups) {
+    const rows = CATEGORIES.filter((c) => c.group === group.key);
+    if (!rows.length) continue;
+    opts.push(`<optgroup label="${escapeHtml(group.label)}">`);
+    for (const c of rows) opts.push(`<option value="${c.value}">${escapeHtml(c.label)}</option>`);
+    opts.push("</optgroup>");
+  }
   return opts.join("");
 }
 
 function getCategoryMeta(value) {
   return CATEGORIES.find((c) => c.value === value) || null;
+}
+
+function displayCategoryLabel(taskCategory) {
+  const key = String(taskCategory || "").trim().toLowerCase();
+  const mapped = TASK_DISPLAY_LABEL[key];
+  if (mapped) return mapped;
+  const meta = getCategoryMeta(taskCategory);
+  return meta?.label || taskCategory || "-";
+}
+
+function rowKindMeta(taskCategory) {
+  const meta = getCategoryMeta(taskCategory);
+  if (!meta) return null;
+  const isCost = String(meta.line_kind || "").toLowerCase() === "cost";
+  return {
+    kind: isCost ? "cost" : "activity",
+    label: isCost ? "Cost/OPE row" : "Activity row",
+    pillClass: isCost ? "row-kind-pill cost" : "row-kind-pill activity",
+  };
+}
+
+function entryClassForTask(taskCategory) {
+  const key = String(taskCategory || "").trim().toLowerCase();
+  if (key === "meeting") return EntryClass.MEETING;
+  if (key === "miscellaneous") return EntryClass.MISC;
+  if (key === "notary_fee" || key.startsWith("ope_")) return EntryClass.OPEX;
+  return EntryClass.SERVICE;
+}
+
+function expenseTypeForTask(taskCategory) {
+  const key = String(taskCategory || "").trim().toLowerCase();
+  return TASK_TO_EXPENSE_TYPE[key] || null;
 }
 
 function toActivityType(taskCategory) {
@@ -157,7 +226,11 @@ function extractLogNoteFromDescription(description, accountCategory) {
   }
 
   if (accountCategory === "retainer") {
-    const structured = rawLower.includes("retainer ope") || map["invoice"] !== undefined || map["assignee"] !== undefined;
+    const structured =
+      rawLower.includes("retainer ope")
+      || rawLower.includes("retainer activity")
+      || map["invoice"] !== undefined
+      || map["assignee"] !== undefined;
     if (!structured) return raw;
     const notes = cleanText(map["notes"]);
     return notes === "-" ? "" : notes;
@@ -166,16 +239,27 @@ function extractLogNoteFromDescription(description, accountCategory) {
   return raw;
 }
 
-function buildTrackerConnectedDescription({ accountCategory, note, fallbackLabel }) {
+function buildTrackerConnectedDescription({ accountCategory, note, fallbackLabel, entryClass, selectedMatter }) {
   const text = cleanText(note);
   const fallback = cleanText(fallbackLabel) || "Activity";
+  const matterCaseType = cleanText(selectedMatter?.case_type);
+  const matterVenue = cleanText(selectedMatter?.venue);
+  const matterStatusRaw = cleanText(selectedMatter?.status).toLowerCase();
+  const litigationStatus =
+    matterStatusRaw === "active" ? "In progress"
+      : matterStatusRaw === "closed" ? "Closed"
+        : (cleanText(selectedMatter?.status) || "-");
+  const officialCaseNo = cleanText(selectedMatter?.official_case_no);
+  const retainerRef = cleanText(selectedMatter?.retainer_contract_ref);
+  const retainerPeriod = cleanText(selectedMatter?.retainer_period_yyyymm);
 
   if (accountCategory === "litigation") {
     const parts = [
-      "Venue: -",
-      "Case Type: Civil Case",
-      "Tracker Status: In progress",
+      `Venue: ${matterVenue || "-"}`,
+      `Case Type: ${matterCaseType || "-"}`,
+      `Tracker Status: ${litigationStatus}`,
     ];
+    if (officialCaseNo) parts.push(`Official Case No: ${officialCaseNo}`);
     if (text) parts.push(`Notes: ${text}`);
     parts.push("Source: activity_log");
     return parts.join(" | ");
@@ -195,12 +279,15 @@ function buildTrackerConnectedDescription({ accountCategory, note, fallbackLabel
   }
 
   if (accountCategory === "retainer") {
+    const isOpexLike = entryClass === EntryClass.OPEX;
     const parts = [
-      "Retainer OPE | Invoice: -",
+      `${isOpexLike ? "Retainer OPE" : "Retainer Activity"} | Invoice: -`,
       "Assignee: -",
       "Location: -",
       "Handling: -",
     ];
+    if (retainerRef) parts.push(`Contract Ref: ${retainerRef}`);
+    if (retainerPeriod) parts.push(`Period: ${retainerPeriod}`);
     if (text) parts.push(`Notes: ${text}`);
     parts.push("Source: activity_log");
     return parts.join(" | ");
@@ -270,35 +357,63 @@ export async function renderLogActivity(appEl, ctx, navigate) {
   const selfLabel = ctx.profile?.full_name || ctx.profile?.email || ctx.user?.email || "Me";
 
   appEl.innerHTML = `
-    <div class="card">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+    <div class="card activity-receipt-shell">
+      <div class="activity-receipt-head">
         <div>
-          <h2 style="margin:0">Activities</h2>
-          <div class="muted" style="font-size:12px;margin-top:4px">Step-by-step entry. Filled rows become activity entries.</div>
+          <span class="activity-receipt-kicker">Office Work Receipt</span>
+          <h2 class="activity-receipt-title">Activities</h2>
+          <div class="activity-receipt-sub">Receipt-style entry. Filled lines become activity entries.</div>
         </div>
-        <div class="muted" style="font-size:12px">Autosave: <span id="autosaveLabel">Not saved yet</span></div>
+        <div class="activity-meta-grid">
+          <div class="activity-meta-box">
+            <span class="activity-meta-label">Batch</span>
+            <strong id="batchIdLabel" class="activity-meta-value">-</strong>
+          </div>
+          <div class="activity-meta-box">
+            <span class="activity-meta-label">Autosave</span>
+            <strong id="autosaveLabel" class="activity-meta-value">Not saved yet</strong>
+          </div>
+        </div>
       </div>
 
       <hr/>
 
-      <div class="layout-activities">
-        <form id="form" class="stack">
+      <div class="layout-activities activity-receipt-layout">
+        <form id="form" class="stack activity-form">
           <div class="stepper" aria-label="Activity flow">
             <div class="step" data-step="1"><span class="step-num">1</span><span class="step-label">Details</span></div>
             <div class="step" data-step="2"><span class="step-num">2</span><span class="step-label">Entries</span></div>
             <div class="step" data-step="3"><span class="step-num">3</span><span class="step-label">Review</span></div>
           </div>
 
-          <section class="step-card" id="step1" data-step="1">
+          <section class="step-card receipt-step" id="step1" data-step="1">
             <div class="step-head">
               <h3 class="step-title">Step 1: Details</h3>
-              <div class="step-sub">Context first. Keep it simple.</div>
+              <div class="step-sub">Who, where, and what this receipt belongs to.</div>
             </div>
 
             <div class="grid2" style="grid-template-columns: minmax(220px,1.4fr) minmax(170px,.8fr) minmax(170px,.8fr)">
               <div>
-                <label>Search Client/Account</label>
-                <input id="accountSearch" placeholder="Type to filter accounts..." />
+                <label>Client/Account</label>
+                <div style="display:flex;gap:8px;align-items:flex-start">
+                  <div style="position:relative;flex:1">
+                    <input
+                      id="accountSearch"
+                      autocomplete="off"
+                      placeholder="Type to search and select an account..."
+                      style="width:100%"
+                      role="combobox"
+                      aria-autocomplete="list"
+                      aria-expanded="false"
+                      aria-controls="accountSearchMenu"
+                    />
+                    <div
+                      id="accountSearchMenu"
+                      role="listbox"
+                      style="display:none;position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:30;max-height:280px;overflow:auto;background:var(--panel,#fff);border:1px solid var(--line,#d9e2ef);border-radius:10px;box-shadow:0 12px 28px rgba(15,23,42,.12);padding:6px"
+                    ></div>
+                  </div>
+                </div>
               </div>
               <div>
                 <label>Category</label>
@@ -316,18 +431,27 @@ export async function renderLogActivity(appEl, ctx, navigate) {
               </div>
             </div>
 
-            <label>Client/Account</label>
-            <div style="display:flex;gap:8px;align-items:center">
-              <select id="account_id" required style="flex:1"></select>
-              <button id="manageAccountsBtn" type="button" class="btn btn-ghost" style="width:auto">Manage</button>
-            </div>
+            <select id="account_id" required style="display:none" aria-hidden="true" tabindex="-1"></select>
             <div class="field-error" data-for="account_id"></div>
+            <div style="margin-top:8px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+              <label style="display:flex;align-items:center;gap:8px;font-weight:500;margin:0">
+                <input id="showArchivedAccounts" type="checkbox" style="width:auto;margin:0" />
+                Show archived accounts
+              </label>
+              <button id="manageAccountsBtn" type="button" class="btn btn-ghost" style="width:auto">Manage Accounts</button>
+            </div>
             <div id="noAccounts" class="items-help" style="display:none;margin-top:10px"></div>
 
             <div class="grid2">
               <div>
-                <label>Matter/Engagement (optional)</label>
-                <input id="matter" placeholder="Optional" />
+                <label>Matter / Identifier (recommended)</label>
+                <select id="matter_id">
+                  <option value="">(none)</option>
+                </select>
+                <div class="field-error" data-for="matter_id"></div>
+                <div id="matterHint" class="muted" style="font-size:12px;margin-top:6px">Select a structured matter for strict identifiers.</div>
+                <input id="matter" placeholder="Fallback title if no matter is selected" />
+                <div id="matterIdentifierChips" class="muted" style="font-size:12px;margin-top:6px"></div>
               </div>
               <div>
                 <label>Billing Status (optional)</label>
@@ -360,21 +484,21 @@ export async function renderLogActivity(appEl, ctx, navigate) {
             <textarea id="general_notes" rows="2" placeholder="Optional context that applies to all entries..."></textarea>
           </section>
 
-          <section class="step-card" id="step2" data-step="2">
+          <section class="step-card receipt-step" id="step2" data-step="2">
             <div class="step-head">
-              <h3 class="step-title">Step 2: Entries</h3>
-              <div class="step-sub">Excel-style rows. Empty rows are ignored on submit.</div>
+              <h3 class="step-title">Step 2: Activity / Cost Lines</h3>
+              <div class="step-sub">Each line is one activity/expense item.</div>
             </div>
 
             <div class="items-help">
-              Receipt upload is required for OPE expense rows (Notary, Printing, Envelope, LBC, Transpo). Man Hour is treated like a normal amount (no timekeeping).
+              Each row creates one activity log entry. OPE/Notary rows are cost/expense-type activity entries and require receipts. Man Hour is treated like a normal amount (no timekeeping).
             </div>
 
             <div class="table-wrap">
               <table class="entries-table">
                 <thead>
                   <tr>
-                    <th style="width:190px">Category</th>
+                    <th style="width:190px">Activity / Cost</th>
                     <th style="width:140px">Amount (PHP)</th>
                     <th>Notes</th>
                     <th style="width:210px">Receipt</th>
@@ -386,7 +510,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
             </div>
             <div class="field-error" data-for="entries"></div>
 
-            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
+            <div class="activity-entry-actions">
               <button id="addRowBtn" type="button" class="btn btn-primary">+ Add Row</button>
               <select id="templateSel" class="btn" style="width:auto"></select>
               <button id="continueBtn" type="button" class="btn">Continue to Review</button>
@@ -396,10 +520,10 @@ export async function renderLogActivity(appEl, ctx, navigate) {
             <p id="msg2" class="msg"></p>
           </section>
 
-          <section class="step-card" id="step3" data-step="3" style="display:none">
+          <section class="step-card receipt-step" id="step3" data-step="3" style="display:none">
             <div class="step-head">
               <h3 class="step-title">Step 3: Review and Submit</h3>
-              <div class="step-sub">Double-check the rows and receipts.</div>
+              <div class="step-sub">Final activity/cost line preview before submission.</div>
             </div>
 
             <div id="reviewBox" class="panel"></div>
@@ -416,7 +540,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
           <p id="msg" class="msg"></p>
         </form>
 
-        <aside class="panel summary-panel">
+        <aside class="panel summary-panel receipt-summary-panel">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
             <h3 style="margin:0">Summary</h3>
             <span class="status-pill" id="summaryStatus">Draft</span>
@@ -446,6 +570,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
   const $ = (sel) => appEl.querySelector(sel);
 
   // DOM refs (more are added in later patches).
+  const batchIdLabel = $("#batchIdLabel");
   const autosaveLabel = $("#autosaveLabel");
   const savedAtEl = $("#savedAt");
   const summaryStatus = $("#summaryStatus");
@@ -454,12 +579,17 @@ export async function renderLogActivity(appEl, ctx, navigate) {
 
   const form = $("#form");
   const accountSearch = $("#accountSearch");
+  const accountSearchMenu = $("#accountSearchMenu");
   const accountCategoryFilter = $("#accountCategoryFilter");
   const accountSel = $("#account_id");
+  const showArchivedAccounts = $("#showArchivedAccounts");
   const manageAccountsBtn = $("#manageAccountsBtn");
   const noAccounts = $("#noAccounts");
   const dateInput = $("#occurred_on");
+  const matterSel = $("#matter_id");
+  const matterHint = $("#matterHint");
   const matterInput = $("#matter");
+  const matterIdentifierChips = $("#matterIdentifierChips");
   const billingStatusSel = $("#billing_status");
   const handlingSel = $("#handling_lawyer_id");
   const performedByLabel = $("#performedByLabel");
@@ -490,12 +620,150 @@ export async function renderLogActivity(appEl, ctx, navigate) {
   let lastSavedLabel = null;
   let rowCount = 0;
   let accountRows = [];
+  let matterRows = [];
+  let matterById = new Map();
   let currentDraftKey = "";
+  let accountPickerRows = [];
+  let accountPickerActiveIndex = -1;
+  let accountPickerMouseDown = false;
+
+  function syncAccountSearchFromSelected() {
+    if (!accountSearch) return;
+    const selected = (accountRows || []).find((a) => String(a.id || "") === String(accountSel?.value || ""));
+    if (!selected) return;
+    const label = formatAccountPickerLabel(selected);
+    if (String(accountSearch.value || "") !== label) accountSearch.value = label;
+  }
+
+  function setAccountPickerMenuOpen(open) {
+    if (!accountSearchMenu) return;
+    const next = !!open && !isBusy;
+    accountSearchMenu.style.display = next ? "block" : "none";
+    accountSearch.setAttribute("aria-expanded", next ? "true" : "false");
+    if (!next) accountPickerActiveIndex = -1;
+  }
+
+  function renderAccountPickerMenu(rows, { query = "" } = {}) {
+    if (!accountSearchMenu) return;
+    const trimmedQuery = String(query || "").trim();
+    const maxShown = 12;
+    const visible = (rows || []).slice(0, maxShown);
+    accountPickerRows = visible;
+
+    if (accountPickerActiveIndex >= visible.length) accountPickerActiveIndex = visible.length - 1;
+    if (visible.length === 0) accountPickerActiveIndex = -1;
+
+    if (!visible.length) {
+      if (trimmedQuery) {
+        accountSearchMenu.innerHTML = `<div class="muted" style="padding:10px 12px;font-size:13px">No matching accounts.</div>`;
+      } else {
+        accountSearchMenu.innerHTML = `<div class="muted" style="padding:10px 12px;font-size:13px">Type to search accounts.</div>`;
+      }
+      return;
+    }
+
+    const selectedId = String(accountSel.value || "");
+    const rowsHtml = visible.map((a, idx) => {
+      const isActive = idx === accountPickerActiveIndex;
+      const isSelected = String(a.id || "") === selectedId;
+      const optionStyle = [
+        "display:block",
+        "width:100%",
+        "text-align:left",
+        "border:0",
+        "border-radius:8px",
+        "padding:8px 10px",
+        "background:" + (isActive ? "rgba(37,99,235,.10)" : (isSelected ? "rgba(37,99,235,.06)" : "transparent")),
+        "cursor:pointer",
+      ].join(";");
+      const title = cleanText(a.title) || "(untitled)";
+      const meta = `${accountCategoryLabel(a.category) || "-"}${cleanText(a.account_kind) ? ` | ${cleanText(a.account_kind)}` : ""}${a.is_archived ? " | archived" : ""}`;
+      return `
+        <button
+          type="button"
+          data-account-picker-id="${a.id}"
+          data-account-picker-index="${idx}"
+          role="option"
+          aria-selected="${isSelected ? "true" : "false"}"
+          style="${optionStyle}"
+        >
+          <div style="font-weight:${isSelected ? "700" : "600"};font-size:13px;line-height:1.2">${escapeHtml(title)}</div>
+          <div class="muted" style="font-size:12px;margin-top:2px">${escapeHtml(meta)}</div>
+        </button>
+      `;
+    }).join("");
+
+    const moreCount = (rows || []).length - visible.length;
+    const footer = moreCount > 0
+      ? `<div class="muted" style="padding:6px 10px 2px 10px;font-size:12px">Showing ${visible.length} of ${(rows || []).length} matches. Keep typing to narrow.</div>`
+      : "";
+    accountSearchMenu.innerHTML = rowsHtml + footer;
+  }
+
+  async function commitAccountPickerSelection(accountId) {
+    const prev = String(accountSel.value || "");
+    accountSel.value = String(accountId || "");
+    syncAccountSearchFromSelected();
+    setFieldError("account_id", "");
+    renderAccountOptions({ preserveSelection: true });
+    renderMatterOptions({ preserveSelection: false });
+    if (String(accountSel.value || "") !== prev) {
+      await loadMembersForAccount(accountSel.value);
+    }
+    setAccountPickerMenuOpen(false);
+    scheduleAutosave();
+    updateUi();
+  }
+
+  function renderBatchLabel() {
+    if (!batchIdLabel) return;
+    const key = String(batchId || "").trim();
+    batchIdLabel.textContent = key ? key.split("-")[0].toUpperCase() : "-";
+  }
+
+  async function applyActivityPrefillIfAny() {
+    const prefill = consumeActivityPrefill();
+    if (!prefill) return false;
+
+    let applied = false;
+    if (prefill.account_id && accountRows.some((a) => String(a.id || "") === prefill.account_id)) {
+      accountSel.value = prefill.account_id;
+      accountSearch.value = "";
+      renderAccountOptions({ preserveSelection: true });
+      syncAccountSearchFromSelected();
+      applied = true;
+    }
+
+    renderMatterOptions({ preserveSelection: false });
+
+    if (prefill.matter_id && matterById.has(prefill.matter_id)) {
+      const matter = matterById.get(prefill.matter_id);
+      if (matter?.account_id) {
+        accountSel.value = String(matter.account_id);
+        accountSearch.value = "";
+        renderAccountOptions({ preserveSelection: true });
+        syncAccountSearchFromSelected();
+      }
+      renderMatterOptions({ preserveSelection: true });
+      matterSel.value = prefill.matter_id;
+      renderMatterIdentifierChips(matter);
+      if (!cleanText(matterInput.value)) matterInput.value = cleanText(matter.title || "");
+      if (matterHint) matterHint.textContent = `Linked from tracker: ${accountCategoryLabel(matter.matter_type)} matter.`;
+      applied = true;
+    }
+
+    if (applied) {
+      await loadMembersForAccount(accountSel.value);
+    }
+
+    return applied;
+  }
 
   function setBusy(busy, label) {
     isBusy = !!busy;
     if (typeof label === "string") msg.textContent = label;
-    [accountSearch, accountCategoryFilter, accountSel, dateInput, matterInput, billingStatusSel, handlingSel, generalNotes].forEach((el) => el && (el.disabled = isBusy));
+    if (isBusy) setAccountPickerMenuOpen(false);
+    [accountSearch, accountCategoryFilter, accountSel, showArchivedAccounts, matterSel, dateInput, matterInput, billingStatusSel, handlingSel, generalNotes].forEach((el) => el && (el.disabled = isBusy));
     [addRowBtn, continueBtn, saveDraftBtn, templateSel, backBtn, finalSaveDraftBtn, submitBtn, clearBtn, manageAccountsBtn].forEach((el) => el && (el.disabled = isBusy));
     entriesBody.querySelectorAll("input,select,textarea,button").forEach((el) => (el.disabled = isBusy));
   }
@@ -508,7 +776,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
   }
 
   function clearErrors() {
-    ["account_id", "occurred_on", "handling_lawyer_id", "entries"].forEach((k) => setFieldError(k, ""));
+    ["account_id", "matter_id", "occurred_on", "handling_lawyer_id", "entries"].forEach((k) => setFieldError(k, ""));
     entriesBody.querySelectorAll("tr").forEach((tr) => tr.classList.remove("invalid-row"));
   }
 
@@ -527,6 +795,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
       <tr data-line-no="${lineNo}">
         <td>
           <select class="cat">${categoryOptions}</select>
+          <div class="row-cues"></div>
           <div class="row-error"></div>
         </td>
         <td>
@@ -570,6 +839,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
       uploadBtn.style.display = "inline-block";
       uploadBtn.textContent = "Upload";
       optional.style.display = "none";
+      renderRowCues(tr);
       return;
     }
     const hasReceipts = getReceipts(tr).length > 0;
@@ -579,6 +849,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
       uploadBtn.style.display = "inline-block";
       uploadBtn.textContent = hasReceipts ? "Add more" : "Upload";
       optional.style.display = "none";
+      renderRowCues(tr);
       return;
     }
 
@@ -591,6 +862,30 @@ export async function renderLogActivity(appEl, ctx, navigate) {
       uploadBtn.style.display = "none";
       optional.style.display = "inline";
     }
+    renderRowCues(tr);
+  }
+
+  function renderRowCues(tr) {
+    const cueEl = tr.querySelector(".row-cues");
+    if (!cueEl) return;
+    const taskCategory = tr.querySelector(".cat")?.value || "";
+    const meta = getCategoryMeta(taskCategory);
+    const kind = rowKindMeta(taskCategory);
+    const hasReceipts = getReceipts(tr).length > 0;
+    if (!meta || !kind) {
+      cueEl.innerHTML = "";
+      return;
+    }
+    const receiptPillClass = meta.needs_receipt
+      ? (hasReceipts ? "row-kind-pill receipt-ok" : "row-kind-pill receipt-required")
+      : "row-kind-pill receipt-optional";
+    const receiptLabel = meta.needs_receipt
+      ? (hasReceipts ? "Receipt attached" : "Receipt required")
+      : "Receipt optional";
+    cueEl.innerHTML = `
+      <span class="${kind.pillClass}">${escapeHtml(kind.label)}</span>
+      <span class="${receiptPillClass}">${escapeHtml(receiptLabel)}</span>
+    `;
   }
 
   function getReceipts(tr) {
@@ -606,6 +901,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
     const list = tr.querySelector(".receiptList");
     if (!paths?.length) {
       list.innerHTML = "";
+      applyReceiptVisibility(tr);
       return;
     }
     list.innerHTML =
@@ -624,7 +920,10 @@ export async function renderLogActivity(appEl, ctx, navigate) {
           const url = await getReceiptUrl(path);
           window.open(url, "_blank", "noopener,noreferrer");
         } catch (err) {
-          alert(`Unable to open receipt: ${err?.message || err}`);
+          await uiAlert({
+            title: "Receipt",
+            message: `Unable to open receipt: ${err?.message || err}`,
+          });
         }
       });
     });
@@ -650,6 +949,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
     tr.querySelector(".receiptList").innerHTML = "";
     tr.classList.remove("invalid-row");
     tr.querySelector(".row-error").textContent = "";
+    tr.querySelector(".row-cues").innerHTML = "";
     applyReceiptVisibility(tr);
     updateUi();
   }
@@ -753,8 +1053,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
     for (const e of entries) {
       if (!e.task_category) continue;
       if (!Number.isFinite(e.amount) || e.amount == null) continue;
-      const meta = getCategoryMeta(e.task_category);
-      const key = meta?.label || e.task_category;
+      const key = displayCategoryLabel(e.task_category);
       map.set(key, (map.get(key) || 0) + Number(e.amount || 0));
     }
     return map;
@@ -765,6 +1064,17 @@ export async function renderLogActivity(appEl, ctx, navigate) {
     let ok = true;
 
     if (!accountSel.value) { if (showErrors) setFieldError("account_id", "Select an account."); ok = false; }
+    const selectedAccount = (accountRows || []).find((a) => String(a.id || "") === String(accountSel.value || ""));
+    if (selectedAccount?.is_archived) {
+      if (showErrors) setFieldError("account_id", "Archived accounts cannot receive new activities. Unarchive first.");
+      ok = false;
+    }
+
+    const selectedMatter = matterById.get(String(matterSel.value || ""));
+    if (selectedMatter && String(selectedMatter.account_id || "") !== String(accountSel.value || "")) {
+      if (showErrors) setFieldError("matter_id", "Selected matter does not belong to this account.");
+      ok = false;
+    }
     if (!dateInput.value) { if (showErrors) setFieldError("occurred_on", "Select a date."); ok = false; }
 
     const entries = collectEntries();
@@ -837,7 +1147,8 @@ export async function renderLogActivity(appEl, ctx, navigate) {
     const occurred_at = localDateInputToIsoNoon(dateInput.value) || new Date().toISOString();
     const billing_status = billingStatusSel.value || null;
     const billable = billingToBillableBoolean(billing_status);
-    const matter = (matterInput.value || "").trim() || null;
+    const selectedMatter = matterById.get(String(matterSel.value || ""));
+    const matter = (matterInput.value || "").trim() || cleanText(selectedMatter?.title) || null;
     const baseNotes = (generalNotes.value || "").trim();
     const selectedAccount = (accountRows || []).find((a) => String(a.id || "") === String(accountSel.value || ""));
     const accountCategory = normalizeAccountCategory(selectedAccount?.category);
@@ -848,16 +1159,37 @@ export async function renderLogActivity(appEl, ctx, navigate) {
 
     return entries.map((e) => {
       const meta = getCategoryMeta(e.task_category);
+      const entry_class = entryClassForTask(e.task_category);
+      const expense_type = expenseTypeForTask(e.task_category);
+      const is_meeting_touchpoint = entry_class === EntryClass.MEETING;
+      const consumes_retainer_quota = is_meeting_touchpoint && accountCategory === "retainer";
+
+      let legacyIdentifier = null;
+      if (selectedMatter) {
+        if (normalizeAccountCategory(selectedMatter.matter_type) === "litigation") {
+          legacyIdentifier = cleanText(selectedMatter.official_case_no) || null;
+        } else if (normalizeAccountCategory(selectedMatter.matter_type) === "special_project") {
+          legacyIdentifier = cleanText(selectedMatter.special_engagement_code) || null;
+        } else if (normalizeAccountCategory(selectedMatter.matter_type) === "retainer") {
+          const ref = cleanText(selectedMatter.retainer_contract_ref);
+          const period = cleanText(selectedMatter.retainer_period_yyyymm);
+          legacyIdentifier = ref && period ? `${ref}-${period}` : (ref || null);
+        }
+      }
+
       const desc = buildTrackerConnectedDescription({
         accountCategory,
         note: e.notes || baseNotes,
         fallbackLabel: meta?.label || "Activity",
+        entryClass: entry_class,
+        selectedMatter,
       });
       return {
         batch_id: batchId,
         line_no: e.line_no,
 
         account_id: accountSel.value,
+        matter_id: selectedMatter?.id || null,
         matter,
         billing_status,
         billable,
@@ -868,8 +1200,13 @@ export async function renderLogActivity(appEl, ctx, navigate) {
 
         status,
         activity_type: toActivityType(e.task_category),
+        entry_class,
+        expense_type,
+        is_meeting_touchpoint,
+        consumes_retainer_quota,
         fee_code: meta?.fee_code || null,
         task_category: e.task_category,
+        legacy_identifier_text: legacyIdentifier,
         amount: Number(e.amount || 0),
         minutes: 0,
         description: desc,
@@ -922,7 +1259,11 @@ export async function renderLogActivity(appEl, ctx, navigate) {
       return;
     }
 
-    const ok = confirm("Submit these entries for approval? This will create Pending activities.");
+    const ok = await uiConfirm({
+      title: "Submit Entries",
+      message: "Submit these entries for approval? This will create Pending activities.",
+      confirmText: "Submit",
+    });
     if (!ok) return;
 
     try {
@@ -957,44 +1298,58 @@ export async function renderLogActivity(appEl, ctx, navigate) {
 
   function renderReview(entries) {
     if (!entries.length) {
-      reviewBox.innerHTML = `<div class="muted">No entries yet.</div>`;
+      reviewBox.innerHTML = `<div class="muted">No activity/cost lines yet.</div>`;
       return;
     }
 
     const totals = computeTotalsByCategory(entries);
     const totalValue = Array.from(totals.values()).reduce((s, x) => s + x, 0);
+    const accountLabel = accountSel.options[accountSel.selectedIndex]?.text || "-";
+    const receiptDate = dateInput.value || "-";
 
     reviewBox.innerHTML = `
-      <div class="table-wrap" style="margin-top:6px">
-        <table>
-          <thead>
-            <tr>
-              <th>Category</th>
-              <th>Amount</th>
-              <th>Notes</th>
-              <th>Receipt</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${entries.map((e) => {
-              const meta = getCategoryMeta(e.task_category);
-              const needs = meta?.needs_receipt;
-              const has = e.receipts && e.receipts.length > 0;
-              return `
-                <tr>
-                  <td><strong>${escapeHtml(meta?.label || e.task_category)}</strong></td>
-                  <td>P${peso(e.amount)}</td>
-                  <td>${escapeHtml(e.notes || "")}</td>
-                  <td>${needs ? (has ? `<span class="status-pill completed">ok</span>` : `<span class="status-pill rejected">missing</span>`) : `<span class="muted">optional</span>`}</td>
-                </tr>
-              `;
-            }).join("")}
-          </tbody>
-        </table>
-      </div>
-      <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:10px">
-        <div class="muted">Account: <strong>${escapeHtml(accountSel.options[accountSel.selectedIndex]?.text || "-")}</strong></div>
-        <div class="muted">Total: <strong>P${peso(totalValue)}</strong></div>
+      <div class="review-receipt">
+        <div class="review-receipt-head">
+          <div>
+            <div class="review-receipt-kicker">Draft Activity / Cost Lines Preview</div>
+            <div class="review-receipt-meta">Account: <strong>${escapeHtml(accountLabel)}</strong></div>
+          </div>
+          <div class="review-receipt-meta">Date: <strong>${escapeHtml(receiptDate)}</strong></div>
+        </div>
+        <div class="table-wrap" style="margin-top:10px">
+          <table>
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Type</th>
+                <th>Amount</th>
+                <th>Notes</th>
+                <th>Receipt</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${entries.map((e) => {
+                const meta = getCategoryMeta(e.task_category);
+                const kind = rowKindMeta(e.task_category);
+                const needs = meta?.needs_receipt;
+                const has = e.receipts && e.receipts.length > 0;
+                return `
+                  <tr>
+                    <td><strong>${escapeHtml(displayCategoryLabel(e.task_category))}</strong></td>
+                    <td>${kind ? `<span class="${kind.pillClass}">${escapeHtml(kind.label)}</span>` : `<span class="muted">-</span>`}</td>
+                    <td>P${peso(e.amount)}</td>
+                    <td>${escapeHtml(e.notes || "")}</td>
+                    <td>${needs ? (has ? `<span class="status-pill completed">ok</span>` : `<span class="status-pill rejected">missing</span>`) : `<span class="muted">optional</span>`}</td>
+                  </tr>
+                `;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+        <div class="review-receipt-foot">
+          <div class="review-receipt-total-label">Total</div>
+          <div class="review-receipt-total-value">P${peso(totalValue)}</div>
+        </div>
       </div>
     `;
   }
@@ -1006,12 +1361,12 @@ export async function renderLogActivity(appEl, ctx, navigate) {
     const totalValue = Array.from(totals.values()).reduce((s, x) => s + x, 0);
 
     if (!totals.size) {
-      summaryTotals.innerHTML = `<div class="muted">No totals yet.</div>`;
+      summaryTotals.innerHTML = `<div class="muted">No line totals yet.</div>`;
     } else {
       summaryTotals.innerHTML = Array.from(totals.entries())
         .sort((a, b) => b[1] - a[1])
-        .map(([k, v]) => `<div style="display:flex;justify-content:space-between;gap:10px"><span>${escapeHtml(k)}</span><strong>P${peso(v)}</strong></div>`)
-        .join("") + `<hr/><div style="display:flex;justify-content:space-between;gap:10px"><span>Total</span><strong>P${peso(totalValue)}</strong></div>`;
+        .map(([k, v]) => `<div class="receipt-total-row"><span>${escapeHtml(k)}</span><strong>P${peso(v)}</strong></div>`)
+        .join("") + `<div class="receipt-total-divider"></div><div class="receipt-total-row grand"><span>Total</span><strong>P${peso(totalValue)}</strong></div><div class="receipt-total-note">Totals combine activity and cost/OPE lines.</div>`;
     }
 
     const missingReceipts = filled.filter((e) => {
@@ -1025,7 +1380,9 @@ export async function renderLogActivity(appEl, ctx, navigate) {
     if (!handlingSel.value) warnings.push("Handling Lawyer missing (required to submit)");
     if (entriesBody.querySelectorAll("tr").length < MAX_ROWS) warnings.push("Tip: click + Add Row when you need another entry.");
 
-    summaryWarnings.innerHTML = warnings.length ? warnings.map((w) => `<div>${escapeHtml(w)}</div>`).join("") : `<div>No warnings.</div>`;
+    summaryWarnings.innerHTML = warnings.length
+      ? `<div class="receipt-warning-list">${warnings.map((w) => `<div class="receipt-warning-item">${escapeHtml(w)}</div>`).join("")}</div>`
+      : `<div>No warnings.</div>`;
   }
 
   function updateUi() {
@@ -1057,6 +1414,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
       autosaveTimer = null;
     }
     batchId = safeUuid();
+    renderBatchLabel();
     currentDraftKey = "";
     lastSavedLabel = null;
     autosaveLabel.textContent = "Not saved yet";
@@ -1065,11 +1423,16 @@ export async function renderLogActivity(appEl, ctx, navigate) {
 
     accountSearch.value = "";
     accountCategoryFilter.value = "";
+    if (showArchivedAccounts) showArchivedAccounts.checked = false;
     accountSel.value = "";
+    matterSel.value = "";
     matterInput.value = "";
     billingStatusSel.value = "";
     ensureSelectHasValue(handlingSel, String(ctx.user.id || ""));
     generalNotes.value = "";
+    renderMatterIdentifierChips(null);
+    renderAccountOptions({ preserveSelection: false });
+    renderMatterOptions({ preserveSelection: false });
 
     entriesBody.innerHTML = "";
     rowCount = 0;
@@ -1087,43 +1450,141 @@ export async function renderLogActivity(appEl, ctx, navigate) {
     const prev = preserveSelection ? String(accountSel.value || "") : "";
     const q = String(accountSearch.value || "").trim().toLowerCase();
     const categoryFilter = normalizeAccountCategory(accountCategoryFilter.value);
+    const includeArchived = !!showArchivedAccounts?.checked;
+    const prevRow = (accountRows || []).find((a) => String(a.id || "") === prev) || null;
+    const prevLabelNorm = prevRow ? formatAccountPickerLabel(prevRow).toLowerCase() : "";
+    const queryIsCurrentSelectionLabel = !!q && !!prevLabelNorm && q === prevLabelNorm;
+    const filterQuery = queryIsCurrentSelectionLabel ? "" : q;
+    const allowPreservePrev = !!prev && (!q || prevLabelNorm === q);
 
     const filtered = (accountRows || [])
       .filter((a) => {
+        if (!includeArchived && !!a.is_archived) return false;
         const categoryNorm = normalizeAccountCategory(a.category);
         if (categoryFilter && categoryNorm !== categoryFilter) return false;
-        if (!q) return true;
+        if (!filterQuery) return true;
         const hay = [
           String(a.title || ""),
           String(a.category || ""),
+          String(a.account_kind || ""),
           accountCategoryLabel(a.category),
+          formatAccountPickerLabel(a),
         ].join(" ").toLowerCase();
-        return hay.includes(q);
+        return hay.includes(filterQuery);
       })
       .sort((a, b) => String(a.title || "").localeCompare(String(b.title || "")));
 
+    const exactMatch = q
+      ? filtered.find((a) => formatAccountPickerLabel(a).toLowerCase() === q)
+      : null;
+
     if (!filtered.length) {
       accountSel.innerHTML = `<option value="">No matching accounts</option>`;
+      renderAccountPickerMenu([], { query: filterQuery || q });
       return { rows: filtered };
     }
 
     accountSel.innerHTML =
       `<option value="">Select an account...</option>` +
       filtered
-        .map((a) => `<option value="${a.id}">${escapeHtml(a.title)} (${escapeHtml(accountCategoryLabel(a.category) || "-")})</option>`)
+        .map((a) => {
+          return `<option value="${a.id}">${escapeHtml(formatAccountPickerLabel(a))}</option>`;
+        })
         .join("");
 
-    if (prev && filtered.some((a) => String(a.id) === prev)) {
+    if (exactMatch) {
+      accountSel.value = exactMatch.id;
+      syncAccountSearchFromSelected();
+    } else if (allowPreservePrev && filtered.some((a) => String(a.id) === prev)) {
       accountSel.value = prev;
+    } else if (q) {
+      accountSel.value = "";
     }
 
+    renderAccountPickerMenu(filtered, { query: filterQuery });
+
     return { rows: filtered };
+  }
+
+  function renderMatterIdentifierChips(matter) {
+    if (!matterIdentifierChips) return;
+    if (!matter) {
+      matterIdentifierChips.innerHTML = `<span>No structured identifier selected.</span>`;
+      return;
+    }
+
+    const chips = [];
+    const type = normalizeAccountCategory(matter.matter_type);
+    if (type === "litigation") {
+      chips.push(`Official: ${cleanText(matter.official_case_no) || "-"}`);
+      if (cleanText(matter.internal_case_code)) chips.push(`Internal: ${cleanText(matter.internal_case_code)}`);
+    } else if (type === "special_project") {
+      chips.push(`Code: ${cleanText(matter.special_engagement_code) || "-"}`);
+    } else if (type === "retainer") {
+      chips.push(`Ref: ${cleanText(matter.retainer_contract_ref) || "-"}`);
+      chips.push(`Period: ${cleanText(matter.retainer_period_yyyymm) || "-"}`);
+    }
+
+    matterIdentifierChips.innerHTML = chips.length
+      ? chips.map((x) => `<span class="status-pill" style="margin-right:6px">${escapeHtml(x)}</span>`).join("")
+      : `<span>No identifier data.</span>`;
+  }
+
+  function renderMatterOptions({ preserveSelection = true } = {}) {
+    const prev = preserveSelection ? String(matterSel.value || "") : "";
+    const accountId = String(accountSel.value || "");
+    const normalizedCategoryFilter = normalizeAccountCategory(accountCategoryFilter.value);
+
+    const rows = (matterRows || [])
+      .filter((m) => {
+        if (accountId && String(m.account_id || "") !== accountId) return false;
+        if (!normalizedCategoryFilter) return true;
+        return normalizeAccountCategory(m.matter_type) === normalizedCategoryFilter;
+      })
+      .sort((a, b) => String(a.title || "").localeCompare(String(b.title || "")));
+
+    matterSel.innerHTML =
+      `<option value="">(none)</option>` +
+      rows.map((m) => {
+        const typeLabel = accountCategoryLabel(m.matter_type) || "Matter";
+        const status = cleanText(m.status) || "active";
+        return `<option value="${m.id}">${escapeHtml(cleanText(m.title) || "(untitled)")} [${escapeHtml(typeLabel)} | ${escapeHtml(status)}]</option>`;
+      }).join("");
+
+    if (prev && rows.some((m) => String(m.id) === prev)) {
+      matterSel.value = prev;
+    }
+
+    const selected = rows.find((m) => String(m.id) === String(matterSel.value || "")) || null;
+    if (selected) {
+      if (matterHint) matterHint.textContent = `Linked to ${accountCategoryLabel(selected.matter_type)} matter.`;
+      if (!cleanText(matterInput.value)) matterInput.value = cleanText(selected.title || "");
+    } else if (matterHint) {
+      matterHint.textContent = "Select a structured matter for strict identifiers.";
+    }
+    renderMatterIdentifierChips(selected);
+
+    return { rows, selected };
+  }
+
+  async function loadMatters() {
+    const { data, error } = await supabase
+      .from("matters")
+      .select("id,account_id,matter_type,title,status,official_case_no,internal_case_code,special_engagement_code,retainer_contract_ref,retainer_period_yyyymm,handling_lawyer_id")
+      .order("created_at", { ascending: false })
+      .limit(5000);
+    if (error) throw error;
+
+    matterRows = data || [];
+    matterById = new Map(matterRows.map((m) => [String(m.id), m]));
+    renderMatterOptions();
+    return { rows: matterRows };
   }
 
   async function loadAccounts() {
     const { data, error } = await supabase
       .from("accounts")
-      .select("id,title,category,status,created_at")
+      .select("id,title,category,account_kind,status,is_archived,created_at")
       .order("created_at", { ascending: false });
     if (error) throw error;
 
@@ -1131,13 +1592,15 @@ export async function renderLogActivity(appEl, ctx, navigate) {
     accountRows = rows;
     if (!rows.length) {
       accountSel.innerHTML = `<option value="">No accounts assigned</option>`;
+      renderAccountPickerMenu([], { query: String(accountSearch.value || "") });
+      setAccountPickerMenuOpen(false);
       noAccounts.style.display = "block";
 
       const isAdmin = ["super_admin", "admin"].includes(String(ctx.profile.role || ""));
       noAccounts.innerHTML = `
         <strong>No accounts assigned</strong>
         <div class="muted" style="margin-top:6px">
-          Click Manage to view Accounts. ${isAdmin ? "Or create one here:" : "Ask an admin to assign your account."}
+          Click Manage Accounts to view Accounts. ${isAdmin ? "Or create one here:" : "Ask an admin to assign your account."}
         </div>
         ${isAdmin ? `
           <hr/>
@@ -1174,15 +1637,21 @@ export async function renderLogActivity(appEl, ctx, navigate) {
             qcMsg.textContent = "Error: Title is required.";
             return;
           }
-          const { error: cErr } = await supabase.from("accounts").insert({ title, category, created_by: ctx.user.id });
+          const account_kind = category === "retainer" ? "company" : "personal";
+          const { error: cErr } = await supabase
+            .from("accounts")
+            .insert({ title, category, account_kind, created_by: ctx.user.id, is_archived: false });
           qcMsg.textContent = cErr ? `Error: ${cErr.message}` : "Created. Reloading...";
           if (!cErr) {
             accountSearch.value = "";
             accountCategoryFilter.value = category;
             const { rows: reloaded } = await loadAccounts();
+            await loadMatters();
             const newest = reloaded?.[0];
             if (newest?.id) {
               accountSel.value = newest.id;
+              syncAccountSearchFromSelected();
+              renderMatterOptions({ preserveSelection: false });
               await loadMembersForAccount(newest.id);
             }
             updateUi();
@@ -1203,6 +1672,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
 
     noAccounts.style.display = "none";
     renderAccountOptions();
+    renderMatterOptions();
     return { rows };
   }
 
@@ -1404,7 +1874,12 @@ export async function renderLogActivity(appEl, ctx, navigate) {
 
   async function deleteDraftBatch(key) {
     if (!key || isBusy) return;
-    const ok = confirm("Delete this draft batch? Uploaded receipts linked to this draft will also be deleted when allowed.");
+    const ok = await uiConfirm({
+      title: "Delete Draft Batch",
+      message: "Delete this draft batch? Uploaded receipts linked to this draft will also be deleted when allowed.",
+      confirmText: "Delete",
+      danger: true,
+    });
     if (!ok) return;
 
     try {
@@ -1512,7 +1987,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
       setBusy(true, "Loading draft...");
       const { data, error } = await supabase
         .from("activities")
-        .select("batch_id,line_no,account_id,matter,billing_status,handling_lawyer_id,occurred_at,description,task_category,amount,attachment_urls")
+        .select("batch_id,line_no,account_id,matter,matter_id,billing_status,handling_lawyer_id,occurred_at,description,task_category,amount,attachment_urls")
         .eq("created_by", ctx.user.id)
         .eq("status", "draft")
         .eq("batch_id", key)
@@ -1524,7 +1999,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
       if (!rows.length) {
         const fallback = await supabase
           .from("activities")
-          .select("batch_id,line_no,account_id,matter,billing_status,handling_lawyer_id,occurred_at,description,task_category,amount,attachment_urls")
+          .select("batch_id,line_no,account_id,matter,matter_id,billing_status,handling_lawyer_id,occurred_at,description,task_category,amount,attachment_urls")
           .eq("created_by", ctx.user.id)
           .eq("status", "draft")
           .eq("id", key)
@@ -1536,12 +2011,18 @@ export async function renderLogActivity(appEl, ctx, navigate) {
 
       const first = rows[0];
       batchId = first.batch_id || key || safeUuid();
+      renderBatchLabel();
       currentDraftKey = key;
       const openedAccount = (accountRows || []).find((a) => String(a.id || "") === String(first.account_id || ""));
       const openedCategory = normalizeAccountCategory(openedAccount?.category);
 
       accountSel.value = first.account_id || "";
-      matterInput.value = first.matter || "";
+      syncAccountSearchFromSelected();
+      renderMatterOptions({ preserveSelection: false });
+      matterSel.value = first.matter_id || "";
+      const draftMatter = matterById.get(String(first.matter_id || ""));
+      renderMatterIdentifierChips(draftMatter || null);
+      matterInput.value = first.matter || cleanText(draftMatter?.title) || "";
       billingStatusSel.value = first.billing_status || "";
 
       dateInput.value = toLocalDateInputValue(first.occurred_at || new Date());
@@ -1629,7 +2110,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
             ${rows.map((x) => {
               const acc = accById.get(x.account_id);
               const title = acc ? `${acc.title} (${acc.category || "-"})` : "Account";
-              const meta = getCategoryMeta(x.task_category);
+              const categoryLabel = displayCategoryLabel(x.task_category);
               const when = x.occurred_at
                 ? new Date(x.occurred_at).toLocaleString([], { year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" })
                 : "-";
@@ -1639,7 +2120,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
                 <tr>
                   <td class="recent-when">${escapeHtml(when)}</td>
                   <td class="recent-client">${escapeHtml(title)}</td>
-                  <td>${escapeHtml(meta?.label || x.task_category || "-")}</td>
+                  <td>${escapeHtml(categoryLabel)}</td>
                   <td class="recent-desc" title="${escapeHtml(desc)}">${escapeHtml(desc)}</td>
                   <td><span class="${recentStatusPillClass(status)}">${escapeHtml(status)}</span></td>
                   <td style="text-align:right;font-weight:700">P${peso(x.amount)}</td>
@@ -1656,13 +2137,18 @@ export async function renderLogActivity(appEl, ctx, navigate) {
   dateInput.value = toLocalDateInputValue(new Date());
   templateSel.innerHTML = TEMPLATE_BUNDLES.map((t) => `<option value="${t.key}">${escapeHtml(t.label)}</option>`).join("");
   ensureRows(DEFAULT_ROWS);
+  renderBatchLabel();
   setStep(2);
   if (performedByLabel) performedByLabel.textContent = `${selfLabel} - ${String(ctx.profile.role || "")}`;
 
   try {
     msg.textContent = "Loading...";
     await loadAccounts();
-    await loadMembersForAccount(accountSel.value);
+    await loadMatters();
+    const prefillApplied = await applyActivityPrefillIfAny();
+    if (!prefillApplied) {
+      await loadMembersForAccount(accountSel.value);
+    }
     msg.textContent = "";
     await Promise.all([loadDraftBatches(), loadRecent()]);
   } catch (e) {
@@ -1675,29 +2161,154 @@ export async function renderLogActivity(appEl, ctx, navigate) {
   form.addEventListener("submit", (e) => e.preventDefault());
   manageAccountsBtn.addEventListener("click", () => navigate("#/accounts"));
 
+  function moveAccountPickerActive(delta) {
+    if (!accountPickerRows.length) return;
+    const len = accountPickerRows.length;
+    const current = Number.isInteger(accountPickerActiveIndex) ? accountPickerActiveIndex : -1;
+    const next = current < 0
+      ? (delta > 0 ? 0 : len - 1)
+      : (current + delta + len) % len;
+    accountPickerActiveIndex = next;
+    renderAccountOptions();
+    setAccountPickerMenuOpen(true);
+    const activeBtn = accountSearchMenu?.querySelector(`[data-account-picker-index="${next}"]`);
+    activeBtn?.scrollIntoView({ block: "nearest" });
+  }
+
   accountSearch.addEventListener("input", async () => {
     const prev = accountSel.value;
     renderAccountOptions();
-    if (accountSel.value !== prev) {
+    setAccountPickerMenuOpen(true);
+    const accountChanged = String(accountSel.value || "") !== String(prev || "");
+    renderMatterOptions({ preserveSelection: !accountChanged });
+    if (accountChanged) {
       await loadMembersForAccount(accountSel.value);
       scheduleAutosave();
     }
     updateUi();
+  });
+
+  accountSearch.addEventListener("focus", () => {
+    renderAccountOptions();
+    setAccountPickerMenuOpen(true);
+  });
+
+  accountSearch.addEventListener("change", async () => {
+    const prev = accountSel.value;
+    const rendered = renderAccountOptions();
+    if (!accountSel.value && rendered.rows.length === 1) {
+      accountSel.value = String(rendered.rows[0].id || "");
+      syncAccountSearchFromSelected();
+    }
+    const accountChanged = String(accountSel.value || "") !== String(prev || "");
+    renderMatterOptions({ preserveSelection: !accountChanged });
+    if (accountChanged) {
+      await loadMembersForAccount(accountSel.value);
+      scheduleAutosave();
+    }
+    setAccountPickerMenuOpen(false);
+    updateUi();
+  });
+
+  accountSearch.addEventListener("keydown", async (e) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      moveAccountPickerActive(1);
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      moveAccountPickerActive(-1);
+      return;
+    }
+    if (e.key === "Escape") {
+      setAccountPickerMenuOpen(false);
+      return;
+    }
+    if (e.key === "Tab") {
+      setAccountPickerMenuOpen(false);
+      return;
+    }
+    if (e.key === "Enter" && accountPickerActiveIndex >= 0 && accountPickerRows[accountPickerActiveIndex]) {
+      e.preventDefault();
+      await commitAccountPickerSelection(accountPickerRows[accountPickerActiveIndex].id);
+    }
+  });
+
+  accountSearch.addEventListener("blur", () => {
+    window.setTimeout(() => {
+      if (accountPickerMouseDown) return;
+      setAccountPickerMenuOpen(false);
+    }, 120);
+  });
+
+  accountSearchMenu?.addEventListener("mousedown", () => {
+    accountPickerMouseDown = true;
+  });
+
+  accountSearchMenu?.addEventListener("click", async (e) => {
+    accountPickerMouseDown = false;
+    const targetEl = e.target instanceof Element ? e.target : null;
+    const btn = targetEl ? targetEl.closest("[data-account-picker-id]") : null;
+    if (!btn) return;
+    const accountId = String(btn.getAttribute("data-account-picker-id") || "");
+    if (!accountId) return;
+    await commitAccountPickerSelection(accountId);
   });
 
   accountCategoryFilter.addEventListener("change", async () => {
     const prev = accountSel.value;
     renderAccountOptions();
-    if (accountSel.value !== prev) {
+    if (document.activeElement === accountSearch) setAccountPickerMenuOpen(true);
+    const accountChanged = String(accountSel.value || "") !== String(prev || "");
+    renderMatterOptions({ preserveSelection: !accountChanged });
+    if (accountChanged) {
       await loadMembersForAccount(accountSel.value);
       scheduleAutosave();
     }
     updateUi();
   });
 
+  showArchivedAccounts?.addEventListener("change", async () => {
+    const prev = accountSel.value;
+    renderAccountOptions();
+    if (document.activeElement === accountSearch) setAccountPickerMenuOpen(true);
+    const accountChanged = String(accountSel.value || "") !== String(prev || "");
+    renderMatterOptions({ preserveSelection: !accountChanged });
+    if (accountChanged) {
+      await loadMembersForAccount(accountSel.value);
+    }
+    scheduleAutosave();
+    updateUi();
+  });
+
   accountSel.addEventListener("change", async () => {
     setFieldError("account_id", "");
+    syncAccountSearchFromSelected();
+    setAccountPickerMenuOpen(false);
+    renderMatterOptions({ preserveSelection: false });
     await loadMembersForAccount(accountSel.value);
+    scheduleAutosave();
+    updateUi();
+  });
+
+  matterSel.addEventListener("change", async () => {
+    const selectedMatter = matterById.get(String(matterSel.value || ""));
+    renderMatterIdentifierChips(selectedMatter || null);
+    if (selectedMatter) {
+      if (String(accountSel.value || "") !== String(selectedMatter.account_id || "")) {
+        accountSel.value = selectedMatter.account_id || "";
+        accountSearch.value = "";
+        renderAccountOptions({ preserveSelection: true });
+        syncAccountSearchFromSelected();
+      }
+      if (!cleanText(matterInput.value)) matterInput.value = cleanText(selectedMatter.title || "");
+      if (matterHint) matterHint.textContent = `Linked to ${accountCategoryLabel(selectedMatter.matter_type)} matter.`;
+      await loadMembersForAccount(accountSel.value);
+    } else if (matterHint) {
+      matterHint.textContent = "Select a structured matter for strict identifiers.";
+    }
+    setFieldError("matter_id", "");
     scheduleAutosave();
     updateUi();
   });
@@ -1738,7 +2349,15 @@ export async function renderLogActivity(appEl, ctx, navigate) {
   finalSaveDraftBtn.addEventListener("click", () => saveDraft({ quiet: false }));
   submitBtn.addEventListener("click", submitPending);
   backBtn.addEventListener("click", () => { step3Msg.textContent = ""; setStep(2); updateUi(); });
-  clearBtn.addEventListener("click", () => { if (confirm("Clear the current sheet?")) resetAll(); });
+  clearBtn.addEventListener("click", async () => {
+    const ok = await uiConfirm({
+      title: "Clear Sheet",
+      message: "Clear the current sheet?",
+      confirmText: "Clear",
+      danger: true,
+    });
+    if (ok) resetAll();
+  });
 
   continueBtn.addEventListener("click", () => {
     clearErrors();

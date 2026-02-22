@@ -67,12 +67,27 @@ function actorLabelForBasis(row, basis) {
   return row.handling_lawyer_name || "Unassigned";
 }
 
+function matterIdentifierLabel(matter) {
+  if (!matter) return "";
+  const type = clean(matter.matter_type).toLowerCase();
+  if (type === "litigation") return clean(matter.official_case_no);
+  if (type === "special_project") return clean(matter.special_engagement_code);
+  if (type === "retainer") {
+    const ref = clean(matter.retainer_contract_ref);
+    const period = clean(matter.retainer_period_yyyymm);
+    return ref && period ? `${ref}-${period}` : ref;
+  }
+  return "";
+}
+
 function buildCsv(rows, basis) {
   const basisLabel = lawyerBasisLabelForValue(basis);
   const headers = [
     "Occurred On",
     "Status",
     "Account",
+    "Matter Type",
+    "Identifier",
     "Matter",
     "Task Category",
     "Fee Code",
@@ -90,6 +105,8 @@ function buildCsv(rows, basis) {
     r.occurred_on,
     r.status,
     r.account_title,
+    r.matter_type,
+    r.matter_identifier,
     r.matter,
     r.task_category,
     r.fee_code,
@@ -129,6 +146,13 @@ export async function renderReports(appEl) {
         <button id="runBtn" class="btn btn-primary" type="button">Run Report</button>
       </div>
       <div class="toolbar" style="margin-top:10px">
+        <select id="matterTypeFilter">
+          <option value="">All Matter Types</option>
+          <option value="litigation">Litigation</option>
+          <option value="special_project">Special Project</option>
+          <option value="retainer">Retainer</option>
+        </select>
+        <input id="identifierFilter" placeholder="Filter by identifier..." />
         <select id="lawyerBasis">
           ${LAWYER_BASIS_OPTIONS.map((x) => `<option value="${x.value}">${x.label}</option>`).join("")}
         </select>
@@ -184,12 +208,46 @@ export async function renderReports(appEl) {
         </table>
       </section>
     </section>
+
+    <section class="card" style="margin-bottom:12px">
+      <h3 style="margin:2px 0 10px">Acquisition Metrics (Prospects)</h3>
+      <div id="acqKpis" class="kpi-grid"></div>
+      <div class="grid2" style="margin-top:10px">
+        <section class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Prospect</th>
+                <th>Stage</th>
+                <th>Assigned Lawyer</th>
+                <th>Pre-Acquisition Spend</th>
+              </tr>
+            </thead>
+            <tbody id="acqProspectTable"></tbody>
+          </table>
+        </section>
+        <section class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Lawyer</th>
+                <th>Prospects</th>
+                <th>Total Spend</th>
+              </tr>
+            </thead>
+            <tbody id="acqLawyerTable"></tbody>
+          </table>
+        </section>
+      </div>
+    </section>
   `;
 
   const $ = (s) => appEl.querySelector(s);
   const fromInput = $("#from");
   const toInput = $("#to");
   const statusSel = $("#status");
+  const matterTypeFilterSel = $("#matterTypeFilter");
+  const identifierFilterInput = $("#identifierFilter");
   const lawyerBasisSel = $("#lawyerBasis");
   const lawyerFilterSel = $("#lawyerFilter");
   const textFilterInput = $("#textFilter");
@@ -205,6 +263,9 @@ export async function renderReports(appEl) {
   const statusBreakdown = $("#statusBreakdown");
   const lawyerBreakdownHead = $("#lawyerBreakdownHead");
   const lawyerBreakdown = $("#lawyerBreakdown");
+  const acqKpis = $("#acqKpis");
+  const acqProspectTable = $("#acqProspectTable");
+  const acqLawyerTable = $("#acqLawyerTable");
 
   const now = new Date();
   const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -395,6 +456,8 @@ export async function renderReports(appEl) {
   function getFilteredRows() {
     const basis = lawyerBasisSel.value;
     const actorFilter = lawyerFilterSel.value;
+    const matterType = clean(matterTypeFilterSel.value).toLowerCase();
+    const identifierText = clean(identifierFilterInput.value).toLowerCase();
     const q = clean(textFilterInput.value).toLowerCase();
 
     return reportRows.filter((r) => {
@@ -402,11 +465,15 @@ export async function renderReports(appEl) {
 
       if (actorFilter === UNASSIGNED_FILTER && actorId) return false;
       if (actorFilter && actorFilter !== UNASSIGNED_FILTER && actorId !== actorFilter) return false;
+      if (matterType && clean(r.matter_type).toLowerCase() !== matterType) return false;
+      if (identifierText && !clean(r.matter_identifier).toLowerCase().includes(identifierText)) return false;
 
       if (!q) return true;
       const hay = [
         r.account_title,
         r.matter,
+        r.matter_type,
+        r.matter_identifier,
         r.description,
         r.task_category,
         r.fee_code,
@@ -433,6 +500,157 @@ export async function renderReports(appEl) {
     renderLawyerBreakdown(visibleRows, basis);
   }
 
+  async function loadAcquisitionReport() {
+    const from = fromInput.value;
+    const to = toInput.value;
+    const fromIso = from || null;
+    const toIso = to || null;
+
+    const [{ data: metricRows, error: metricErr }, prosRes] = await Promise.all([
+      supabase.rpc("get_acquisition_metrics", {
+        p_date_from: fromIso,
+        p_date_to: toIso,
+        p_lawyer_id: null,
+      }),
+      supabase
+        .from("prospects")
+        .select("id,prospect_name,stage,assigned_lawyer_id,opened_at,acquired_at")
+        .order("opened_at", { ascending: false })
+        .limit(3000),
+    ]);
+
+    if (metricErr) {
+      acqKpis.innerHTML = `<article class="kpi-card"><div class="kpi-label">Acquisition Metrics</div><div class="kpi-note">${escapeHtml(metricErr.message)}</div></article>`;
+      acqProspectTable.innerHTML = `<tr><td colspan="4" class="muted">Unable to load acquisition rows.</td></tr>`;
+      acqLawyerTable.innerHTML = `<tr><td colspan="3" class="muted">Unable to load acquisition rows.</td></tr>`;
+      return;
+    }
+    if (prosRes.error) {
+      acqProspectTable.innerHTML = `<tr><td colspan="4" class="muted">${escapeHtml(prosRes.error.message)}</td></tr>`;
+      acqLawyerTable.innerHTML = `<tr><td colspan="3" class="muted">${escapeHtml(prosRes.error.message)}</td></tr>`;
+      return;
+    }
+
+    const metric = Array.isArray(metricRows) && metricRows.length ? metricRows[0] : {
+      total_leads: 0,
+      converted: 0,
+      conversion_rate: 0,
+      avg_acquisition_cost: 0,
+      median_touchpoints: 0,
+      avg_days_to_close: 0,
+    };
+
+    acqKpis.innerHTML = `
+      <article class="kpi-card">
+        <div class="kpi-label">Total Leads</div>
+        <div class="kpi-value">${Number(metric.total_leads || 0)}</div>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-label">Converted</div>
+        <div class="kpi-value">${Number(metric.converted || 0)}</div>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-label">Conversion Rate</div>
+        <div class="kpi-value">${Number(metric.conversion_rate || 0).toFixed(2)}%</div>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-label">Avg Acquisition Cost</div>
+        <div class="kpi-value">P${asPeso(metric.avg_acquisition_cost || 0)}</div>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-label">Median Touchpoints</div>
+        <div class="kpi-value">${Number(metric.median_touchpoints || 0).toFixed(2)}</div>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-label">Avg Days to Close</div>
+        <div class="kpi-value">${Number(metric.avg_days_to_close || 0).toFixed(2)}</div>
+      </article>
+    `;
+
+    const prospects = prosRes.data || [];
+    const prospectIds = prospects.map((p) => p.id);
+    const lawyerIds = Array.from(new Set(prospects.map((p) => p.assigned_lawyer_id).filter(Boolean)));
+
+    const [costRes, lawyerRes] = await Promise.all([
+      prospectIds.length
+        ? supabase
+            .from("prospect_cost_entries")
+            .select("prospect_id,occurred_at,amount")
+            .in("prospect_id", prospectIds)
+        : Promise.resolve({ data: [], error: null }),
+      lawyerIds.length
+        ? supabase.from("profiles").select("id,full_name,email").in("id", lawyerIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+
+    if (costRes.error || lawyerRes.error) {
+      const text = costRes.error?.message || lawyerRes.error?.message || "Acquisition detail load failed.";
+      acqProspectTable.innerHTML = `<tr><td colspan="4" class="muted">${escapeHtml(text)}</td></tr>`;
+      acqLawyerTable.innerHTML = `<tr><td colspan="3" class="muted">${escapeHtml(text)}</td></tr>`;
+      return;
+    }
+
+    const lawyerById = new Map((lawyerRes.data || []).map((x) => [x.id, x]));
+    const costsByProspect = new Map();
+    for (const c of costRes.data || []) {
+      if (!costsByProspect.has(c.prospect_id)) costsByProspect.set(c.prospect_id, []);
+      costsByProspect.get(c.prospect_id).push(c);
+    }
+
+    const detailed = prospects.map((p) => {
+      const costRows = costsByProspect.get(p.id) || [];
+      const cutoff = p.acquired_at ? new Date(p.acquired_at).getTime() : Number.POSITIVE_INFINITY;
+      const spend = costRows
+        .filter((c) => {
+          const ts = new Date(c.occurred_at).getTime();
+          return Number.isFinite(ts) && ts <= cutoff;
+        })
+        .reduce((s, c) => s + Number(c.amount || 0), 0);
+      return { ...p, spend };
+    });
+
+    acqProspectTable.innerHTML = detailed.length
+      ? detailed
+          .slice(0, 50)
+          .map((p) => {
+            const lawyer = lawyerById.get(p.assigned_lawyer_id);
+            const lawyerName = lawyer ? (lawyer.full_name || lawyer.email || lawyer.id) : "Unassigned";
+            return `
+              <tr>
+                <td>${escapeHtml(p.prospect_name || "-")}</td>
+                <td>${escapeHtml(p.stage || "-")}</td>
+                <td>${escapeHtml(lawyerName)}</td>
+                <td><strong>P${asPeso(p.spend)}</strong></td>
+              </tr>
+            `;
+          })
+          .join("")
+      : `<tr><td colspan="4" class="muted">No prospect rows found.</td></tr>`;
+
+    const byLawyer = new Map();
+    for (const p of detailed) {
+      const key = p.assigned_lawyer_id || UNASSIGNED_FILTER;
+      const label = p.assigned_lawyer_id
+        ? (lawyerById.get(p.assigned_lawyer_id)?.full_name || lawyerById.get(p.assigned_lawyer_id)?.email || p.assigned_lawyer_id)
+        : "Unassigned";
+      if (!byLawyer.has(key)) byLawyer.set(key, { label, prospects: 0, spend: 0 });
+      const row = byLawyer.get(key);
+      row.prospects += 1;
+      row.spend += Number(p.spend || 0);
+    }
+
+    const lawyerRows = Array.from(byLawyer.values()).sort((a, b) => b.spend - a.spend);
+    acqLawyerTable.innerHTML = lawyerRows.length
+      ? lawyerRows.map((r) => `
+          <tr>
+            <td>${escapeHtml(r.label)}</td>
+            <td>${r.prospects}</td>
+            <td><strong>P${asPeso(r.spend)}</strong></td>
+          </tr>
+        `).join("")
+      : `<tr><td colspan="3" class="muted">No acquisition spend rows found.</td></tr>`;
+  }
+
   async function runReport() {
     msg.textContent = "";
     const from = fromInput.value;
@@ -450,7 +668,7 @@ export async function renderReports(appEl) {
 
     let query = supabase
       .from("activities")
-      .select("id,account_id,matter,task_category,fee_code,description,amount,billable,minutes,status,created_by,performed_by,handling_lawyer_id,occurred_at")
+      .select("id,account_id,matter,matter_id,task_category,fee_code,description,amount,billable,minutes,status,created_by,performed_by,handling_lawyer_id,occurred_at")
       .gte("occurred_at", toIsoStart(from))
       .lte("occurred_at", toIsoEnd(to))
       .order("occurred_at", { ascending: false })
@@ -468,13 +686,20 @@ export async function renderReports(appEl) {
       new Set((data || []).flatMap((r) => [r.created_by, r.performed_by, r.handling_lawyer_id]).filter(Boolean))
     );
     const accountIds = Array.from(new Set((data || []).map((r) => r.account_id).filter(Boolean)));
+    const matterIds = Array.from(new Set((data || []).map((r) => r.matter_id).filter(Boolean)));
 
-    const [usersRes, accountsRes] = await Promise.all([
+    const [usersRes, accountsRes, mattersRes] = await Promise.all([
       userIds.length
         ? supabase.from("profiles").select("id,full_name,email").in("id", userIds)
         : Promise.resolve({ data: [], error: null }),
       accountIds.length
         ? supabase.from("accounts").select("id,title").in("id", accountIds)
+        : Promise.resolve({ data: [], error: null }),
+      matterIds.length
+        ? supabase
+            .from("matters")
+            .select("id,matter_type,official_case_no,special_engagement_code,retainer_contract_ref,retainer_period_yyyymm")
+            .in("id", matterIds)
         : Promise.resolve({ data: [], error: null }),
     ]);
 
@@ -486,9 +711,14 @@ export async function renderReports(appEl) {
       msg.textContent = `Error: ${accountsRes.error.message}`;
       return;
     }
+    if (mattersRes.error) {
+      msg.textContent = `Error: ${mattersRes.error.message}`;
+      return;
+    }
 
     const userById = new Map((usersRes.data || []).map((u) => [u.id, u]));
     const accountById = new Map((accountsRes.data || []).map((a) => [a.id, a]));
+    const matterById = new Map((mattersRes.data || []).map((m) => [m.id, m]));
 
     reportRows = (data || []).map((r) => {
       const enteredBy = userById.get(r.created_by);
@@ -496,12 +726,16 @@ export async function renderReports(appEl) {
       const handlingLawyer = userById.get(r.handling_lawyer_id);
       const assignee = extractRetainerAssignee(r.task_category, r.description);
       const performedLabelFromProfile = performedBy ? (performedBy.full_name || performedBy.email || "") : "";
+      const matter = matterById.get(r.matter_id);
       return {
         id: r.id,
         occurred_on: r.occurred_at ? new Date(r.occurred_at).toLocaleDateString() : "",
         status: r.status || "",
         account_title: accountById.get(r.account_id)?.title || "Account",
         matter: r.matter || "",
+        matter_id: r.matter_id || "",
+        matter_type: clean(matter?.matter_type || ""),
+        matter_identifier: matterIdentifierLabel(matter),
         task_category: r.task_category || "",
         fee_code: r.fee_code || "",
         description: r.description || "",
@@ -519,6 +753,7 @@ export async function renderReports(appEl) {
 
     populateLawyerFilter(reportRows, lawyerBasisSel.value, true);
     renderCurrentView();
+    await loadAcquisitionReport();
     msg.textContent = `${visibleRows.length} row(s) shown.`;
   }
 
@@ -544,6 +779,8 @@ export async function renderReports(appEl) {
   }
 
   function clearFilters() {
+    matterTypeFilterSel.value = "";
+    identifierFilterInput.value = "";
     lawyerFilterSel.value = "";
     textFilterInput.value = "";
     renderCurrentView();
@@ -556,6 +793,14 @@ export async function renderReports(appEl) {
   clearFiltersBtn.addEventListener("click", clearFilters);
   lawyerBasisSel.addEventListener("change", () => {
     populateLawyerFilter(reportRows, lawyerBasisSel.value, false);
+    renderCurrentView();
+    msg.textContent = `${visibleRows.length} row(s) shown.`;
+  });
+  matterTypeFilterSel.addEventListener("change", () => {
+    renderCurrentView();
+    msg.textContent = `${visibleRows.length} row(s) shown.`;
+  });
+  identifierFilterInput.addEventListener("input", () => {
     renderCurrentView();
     msg.textContent = `${visibleRows.length} row(s) shown.`;
   });

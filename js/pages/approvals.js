@@ -1,5 +1,6 @@
 import { supabase } from "../supabaseClient.js";
 import { escapeHtml } from "../ui/escapeHtml.js";
+import { uiPrompt } from "../ui/modal.js";
 
 const SUPER_ADMIN_ROLES = ["super_admin", "admin"];
 
@@ -343,7 +344,14 @@ export async function renderApprovals(appEl, ctx) {
 
   async function reject(id, wasExpired) {
     if (!id) return;
-    const reason = prompt("Reject reason (required):");
+    const reason = await uiPrompt({
+      title: "Reject Activity",
+      message: "Reject reason is required.",
+      label: "Reason",
+      required: true,
+      confirmText: "Reject",
+      danger: true,
+    });
     if (!reason || !reason.trim()) return;
 
     msg.textContent = "Updating...";

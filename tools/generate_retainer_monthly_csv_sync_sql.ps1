@@ -1,3 +1,8 @@
+param(
+  [string]$BaseDir = "C:\Users\kevin\Documents\Work\Delloro Saulog\Retainer",
+  [string]$OutFile = "sql\37_sync_retainer_monthly_ope_csv_hardened.sql"
+)
+
 $ErrorActionPreference = "Stop"
 
 function Clean([string]$s) {
@@ -117,7 +122,9 @@ function ParseMonthlyOpeSection([string]$filePath) {
   }
 
   $out = @()
+  $sourceRowNo = 0
   foreach ($r in $rows) {
+    $sourceRowNo++
     $dateRaw = Get-Field $r @("DATE")
     $client = Clean (Get-Field $r @("CLIENT", "CLIENTS", "COMPANY"))
     $matter = Clean (Get-Field $r @("PARTICULAR"))
@@ -160,6 +167,7 @@ function ParseMonthlyOpeSection([string]$filePath) {
 
     $out += [pscustomobject]@{
       row_no = 0
+      source_row_no = $sourceRowNo
       source_file = $fileName
       client_name = $client
       occurred_on = $dateIso
@@ -185,6 +193,7 @@ function BuildSql([object[]]$rows) {
   foreach ($r in $rows) {
     $vals += "    (" +
       $r.row_no + ", " +
+      $r.source_row_no + ", " +
       (SqlQuote $r.source_file) + ", " +
       (SqlQuote $r.client_name) + ", " +
       (SqlQuote $r.occurred_on) + ", " +
@@ -204,8 +213,8 @@ function BuildSql([object[]]$rows) {
   $valuesBlock = ($vals -join ",`r`n")
 
   return @"
--- STEP 15: Sync retainer monthly OPE rows from CSV (insert missing only)
--- Source: C:\Users\kevin\Documents\Work\Delloro Saulog\All things\DSLAW RETAINER2026 - *.csv
+-- STEP 37: Sync retainer monthly OPE rows from CSV (hardened: legacy key + safe rerun)
+-- Source: $BaseDir\DSLAW RETAINER2026 - *.csv (OPE detail sections only)
 -- Parsed rows: $($rows.Count)
 -- Safe to re-run.
 
@@ -215,6 +224,7 @@ begin;
 
 with source_rows (
   row_no,
+  source_row_no,
   source_file,
   client_name,
   occurred_on,
@@ -246,13 +256,23 @@ default_lawyer as (
   ) as lawyer_id
 ),
 ensure_accounts as (
-  insert into public.accounts (title, category, status, created_by)
-  select distinct s.client_name, 'retainer', 'active', a.actor_id
+  insert into public.accounts (title, category, status, created_by, account_kind, is_archived)
+  select distinct
+    s.client_name,
+    'retainer',
+    'active',
+    a.actor_id,
+    case
+      when upper(s.client_name) similar to '%( INC| INC\\.| CORP| CORP\\.| CORPORATION| LTD| LTD\\.| HOLDINGS| COMPANY| CO\\.)%'
+        then 'company'
+      else 'personal'
+    end,
+    false
   from source_rows s
   cross join actor a
   where not exists (
     select 1 from public.accounts x
-    where lower(trim(coalesce(x.title,''))) = lower(trim(s.client_name))
+    where public.norm_key(x.title) = public.norm_key(s.client_name)
       and lower(trim(coalesce(x.category,''))) = 'retainer'
   )
   returning id
@@ -261,13 +281,15 @@ target_accounts as (
   select a.id, a.title
   from public.accounts a
   where lower(trim(coalesce(a.category,''))) = 'retainer'
-    and lower(trim(coalesce(a.title,''))) in (select lower(trim(client_name)) from source_rows)
+    and public.norm_key(a.title) in (select public.norm_key(client_name) from source_rows)
 ),
 resolved as (
   select
     s.row_no,
+    s.source_row_no,
     s.source_file,
     ta.id as account_id,
+    s.client_name,
     s.matter,
     s.occurred_on::date as occurred_on,
     s.billing_status,
@@ -321,16 +343,44 @@ resolved as (
       when s.activity_type in ('appearance','pleading_major','pleading_minor','communication') then s.activity_type
       else 'communication'
     end as activity_type,
-    s.task_category
+    s.task_category,
+    concat(
+      'retope:',
+      s.occurred_on, ':',
+      public.norm_key(s.client_name), ':',
+      public.norm_key(s.matter), ':',
+      lower(trim(coalesce(s.invoice_no,''))), ':',
+      lower(trim(coalesce(s.performed_by_name,''))), ':',
+      lower(trim(coalesce(s.handling_name,''))), ':',
+      lower(trim(coalesce(s.activity_type,''))), ':',
+      lower(trim(coalesce(s.billing_status,''))), ':',
+      case when s.billable then '1' else '0' end, ':',
+      trim(to_char(coalesce(s.amount,0::numeric), 'FM999999999999990.00'))
+    ) as legacy_identifier_text
   from source_rows s
-  join target_accounts ta on lower(trim(ta.title)) = lower(trim(s.client_name))
+  join target_accounts ta on public.norm_key(ta.title) = public.norm_key(s.client_name)
+),
+backfilled_legacy as (
+  update public.activities a
+  set
+    legacy_identifier_text = r.legacy_identifier_text,
+    updated_at = now()
+  from resolved r
+  where nullif(trim(coalesce(a.legacy_identifier_text,'')), '') is null
+    and a.account_id = r.account_id
+    and public.norm_key(a.matter) = public.norm_key(r.matter)
+    and a.occurred_at::date = r.occurred_on
+    and lower(trim(coalesce(a.task_category,''))) = lower(trim(coalesce(r.task_category,'')))
+    and coalesce(a.amount, 0::numeric) = coalesce(r.amount, 0::numeric)
+    and lower(coalesce(a.description,'')) like ('%| source: ' || lower(r.source_file) || '%')
+  returning a.id
 ),
 inserted as (
   insert into public.activities (
     batch_id, line_no, account_id, matter, billing_status, billable,
     created_by, activity_type, performed_by, handling_lawyer_id, status,
     fee_code, task_category, amount, minutes, description, occurred_at,
-    attachment_urls, submitted_at, draft_expires_at
+    attachment_urls, submitted_at, draft_expires_at, legacy_identifier_text
   )
   select
     gen_random_uuid(),
@@ -369,33 +419,40 @@ inserted as (
     (r.occurred_on::timestamptz + time '09:00'),
     null,
     case when r.status='draft' then null else now() end,
-    case when r.status='draft' then now()+interval '30 minutes' else null end
+    case when r.status='draft' then now()+interval '30 minutes' else null end,
+    r.legacy_identifier_text
   from resolved r
   where not exists (
     select 1 from public.activities a
+    where lower(trim(coalesce(a.legacy_identifier_text,''))) = lower(trim(coalesce(r.legacy_identifier_text,'')))
+  )
+  and not exists (
+    select 1 from public.activities a
     where a.account_id = r.account_id
-      and lower(trim(coalesce(a.matter,''))) = lower(trim(coalesce(r.matter,'')))
+      and public.norm_key(a.matter) = public.norm_key(r.matter)
       and a.occurred_at::date = r.occurred_on
+      and lower(trim(coalesce(a.task_category,''))) = lower(trim(coalesce(r.task_category,'')))
+      and coalesce(a.amount, 0::numeric) = coalesce(r.amount, 0::numeric)
+      and lower(coalesce(a.description,'')) like ('%| source: ' || lower(r.source_file) || '%')
   )
   returning id
 )
 select
   (select count(*) from source_rows) as source_rows_count,
   (select count(*) from ensure_accounts) as accounts_created,
+  (select count(*) from backfilled_legacy) as legacy_keys_backfilled,
   (select count(*) from inserted) as activities_inserted;
 
 commit;
 "@
 }
 
-$baseDir = "C:\Users\kevin\Documents\Work\Delloro Saulog\All things"
-$allCsv = Get-ChildItem -Path $baseDir -Filter "DSLAW RETAINER2026 - *.csv" -File
+$allCsv = Get-ChildItem -Path $BaseDir -Filter "DSLAW RETAINER2026 - *.csv" -File
 
 $monthlyFiles = $allCsv | Where-Object {
   $_.Name -notmatch "BACKLOG BREAKDOWN 2025|SUMMARY LIST|SUMMARY COLLECTION"
 }
-$summaryCollection = $allCsv | Where-Object { $_.Name -match "SUMMARY COLLECTION" }
-$targets = @($monthlyFiles) + @($summaryCollection)
+$targets = @($monthlyFiles)
 
 $rows = @()
 foreach ($f in $targets) {
@@ -404,8 +461,23 @@ foreach ($f in $targets) {
 
 $rows = $rows |
   Where-Object { $_.client_name -and $_.matter -and $_.occurred_on } |
-  Group-Object { ($_.client_name.ToLowerInvariant() + "|" + $_.occurred_on + "|" + $_.matter.ToLowerInvariant() + "|" + $_.invoice_no.ToLowerInvariant()) } |
-  ForEach-Object { $_.Group[0] }
+  Sort-Object source_file, source_row_no |
+  Group-Object {
+    $amountKey = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "{0:0.00}", [double]$_.amount)
+    @(
+      (Clean $_.client_name).ToLowerInvariant()
+      $_.occurred_on
+      (Clean $_.matter).ToLowerInvariant()
+      (Clean $_.invoice_no).ToLowerInvariant()
+      (Clean $_.performed_by_name).ToLowerInvariant()
+      (Clean $_.handling_name).ToLowerInvariant()
+      (Clean $_.activity_type).ToLowerInvariant()
+      (Clean $_.billing_status).ToLowerInvariant()
+      $(if ($_.billable) { "1" } else { "0" })
+      $amountKey
+    ) -join "|"
+  } |
+  ForEach-Object { $_.Group | Sort-Object source_file, source_row_no | Select-Object -First 1 }
 
 $i = 1
 foreach ($r in $rows) {
@@ -414,6 +486,7 @@ foreach ($r in $rows) {
 }
 
 $sql = BuildSql $rows
-Set-Content -Path "sql\\15_sync_retainer_monthly_ope_csv.sql" -Value $sql -Encoding UTF8
+Set-Content -Path $OutFile -Value $sql -Encoding UTF8
 
 Write-Output ("MONTHLY_ROWS=" + $rows.Count)
+Write-Output ("OUT_FILE=" + $OutFile)

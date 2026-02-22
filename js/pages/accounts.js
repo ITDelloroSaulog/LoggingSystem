@@ -10,7 +10,8 @@ function asPeso(value) {
   });
 }
 
-function normalizeStatus(value) {
+function normalizeStatus(value, isArchived = false) {
+  if (isArchived) return "archived";
   const v = (value || "").toLowerCase();
   if (v === "active") return "active";
   if (v === "inactive") return "inactive";
@@ -41,7 +42,7 @@ export async function renderAccounts(appEl, ctx, navigate) {
       <section id="adminCreate" class="card" style="display:none;margin-bottom:12px">
         <h3 style="margin-top:2px">Create Account</h3>
         <form id="createForm" class="stack">
-          <div class="grid2">
+          <div class="grid2" style="grid-template-columns:1.4fr 1fr 1fr">
             <div>
               <label>Title</label>
               <input id="title" required />
@@ -54,6 +55,13 @@ export async function renderAccounts(appEl, ctx, navigate) {
                 <option value="special_project">Special Project</option>
               </select>
             </div>
+            <div>
+              <label>Account Kind</label>
+              <select id="account_kind">
+                <option value="company">Company</option>
+                <option value="personal">Personal</option>
+              </select>
+            </div>
           </div>
           <button type="submit" class="btn btn-primary">Create</button>
         </form>
@@ -61,7 +69,7 @@ export async function renderAccounts(appEl, ctx, navigate) {
     ` : ""}
 
     <section class="card" style="margin-bottom:12px">
-      <div class="grid2">
+      <div class="grid2" style="grid-template-columns:1.4fr 1fr 1fr 1fr">
         <div>
           <label>Search</label>
           <input id="search" placeholder="Search accounts or category..." />
@@ -73,7 +81,22 @@ export async function renderAccounts(appEl, ctx, navigate) {
             <option value="active">Active</option>
             <option value="inactive">Inactive</option>
             <option value="closed">Closed</option>
+            <option value="archived">Archived</option>
           </select>
+        </div>
+        <div>
+          <label>Account Kind</label>
+          <select id="kindFilter">
+            <option value="">All kinds</option>
+            <option value="company">Company</option>
+            <option value="personal">Personal</option>
+          </select>
+        </div>
+        <div>
+          <label style="display:flex;align-items:center;gap:8px;font-weight:600">
+            <input id="showArchived" type="checkbox" style="width:auto;margin:0" />
+            Show archived
+          </label>
         </div>
       </div>
     </section>
@@ -83,11 +106,13 @@ export async function renderAccounts(appEl, ctx, navigate) {
         <thead>
           <tr>
             <th>Account Name</th>
+            <th>Kind</th>
             <th>Type</th>
             <th>Status</th>
             <th>Total Billed</th>
             <th>Unbilled</th>
             <th>Last Activity</th>
+            ${isAdmin ? "<th>Action</th>" : ""}
           </tr>
         </thead>
         <tbody id="tableBody"></tbody>
@@ -101,6 +126,8 @@ export async function renderAccounts(appEl, ctx, navigate) {
   const kpis = appEl.querySelector("#kpis");
   const searchInput = appEl.querySelector("#search");
   const statusFilter = appEl.querySelector("#statusFilter");
+  const kindFilter = appEl.querySelector("#kindFilter");
+  const showArchived = appEl.querySelector("#showArchived");
 
   let accounts = [];
   let accountStats = new Map();
@@ -118,9 +145,12 @@ export async function renderAccounts(appEl, ctx, navigate) {
 
       const title = appEl.querySelector("#title").value.trim();
       const category = appEl.querySelector("#category").value;
+      const account_kind = appEl.querySelector("#account_kind").value;
       const { error } = await supabase.from("accounts").insert({
         title,
         category,
+        account_kind,
+        is_archived: false,
         created_by: ctx.user.id,
       });
 
@@ -134,7 +164,8 @@ export async function renderAccounts(appEl, ctx, navigate) {
 
   function renderKpis(rows) {
     const totalAccounts = rows.length;
-    const activeCount = rows.filter((a) => normalizeStatus(a.status) === "active").length;
+    const activeCount = rows.filter((a) => normalizeStatus(a.status, a.is_archived) === "active").length;
+    const archivedCount = rows.filter((a) => !!a.is_archived).length;
     let totalBilled = 0;
     let totalUnbilled = 0;
 
@@ -148,7 +179,7 @@ export async function renderAccounts(appEl, ctx, navigate) {
       <article class="kpi-card">
         <div class="kpi-label">Total Accounts</div>
         <div class="kpi-value">${totalAccounts}</div>
-        <div class="kpi-note">${activeCount} active</div>
+        <div class="kpi-note">${activeCount} active | ${archivedCount} archived</div>
       </article>
       <article class="kpi-card">
         <div class="kpi-label">Unbilled Amount</div>
@@ -171,40 +202,71 @@ export async function renderAccounts(appEl, ctx, navigate) {
   function renderTable() {
     const q = (searchInput.value || "").trim().toLowerCase();
     const status = statusFilter.value;
+    const kind = kindFilter.value;
+    const includeArchived = !!showArchived?.checked;
 
     const filtered = accounts.filter((a) => {
       const matchesSearch = !q
         || (a.title || "").toLowerCase().includes(q)
-        || (a.category || "").toLowerCase().includes(q);
-      const matchesStatus = !status || normalizeStatus(a.status) === status;
-      return matchesSearch && matchesStatus;
+        || (a.category || "").toLowerCase().includes(q)
+        || (a.account_kind || "").toLowerCase().includes(q);
+      const normalizedStatus = normalizeStatus(a.status, a.is_archived);
+      const matchesStatus = !status || normalizedStatus === status;
+      const matchesKind = !kind || (a.account_kind || "") === kind;
+      const matchesArchive = includeArchived || !a.is_archived;
+      return matchesSearch && matchesStatus && matchesKind && matchesArchive;
     });
 
     renderKpis(filtered);
 
     if (!filtered.length) {
-      tableBody.innerHTML = `<tr><td colspan="6" class="muted">No accounts found.</td></tr>`;
+      tableBody.innerHTML = `<tr><td colspan="${isAdmin ? 8 : 7}" class="muted">No accounts found.</td></tr>`;
       return;
     }
 
     tableBody.innerHTML = filtered.map((a) => {
       const s = accountStats.get(a.id) || { billed: 0, unbilled: 0, lastActivity: null };
-      const st = normalizeStatus(a.status);
+      const st = normalizeStatus(a.status, a.is_archived);
       const last = s.lastActivity ? new Date(s.lastActivity).toLocaleDateString() : "-";
+      const actionCell = isAdmin
+        ? `<td>${a.is_archived
+            ? `<button class="btn toggleArchive" data-id="${a.id}" data-action="unarchive">Unarchive</button>`
+            : `<button class="btn btn-danger toggleArchive" data-id="${a.id}" data-action="archive">Archive</button>`
+          }</td>`
+        : "";
       return `
         <tr data-id="${a.id}" class="clickable">
           <td><strong>${escapeHtml(a.title)}</strong></td>
+          <td>${escapeHtml(a.account_kind || "-")}</td>
           <td>${escapeHtml(a.category || "-")}</td>
-          <td><span class="status-pill ${st === "active" ? "completed" : ""}">${escapeHtml(st)}</span></td>
+          <td><span class="status-pill ${st === "active" ? "completed" : st === "archived" ? "rejected" : ""}">${escapeHtml(st)}</span></td>
           <td><strong>P${asPeso(s.billed)}</strong></td>
           <td style="color:#df7a00"><strong>P${asPeso(s.unbilled)}</strong></td>
           <td>${last}</td>
+          ${actionCell}
         </tr>
       `;
     }).join("");
 
     tableBody.querySelectorAll("tr[data-id]").forEach((row) => {
-      row.addEventListener("click", () => navigate(`#/accounts/${row.dataset.id}`));
+      row.addEventListener("click", (evt) => {
+        if (evt.target.closest(".toggleArchive")) return;
+        navigate(`#/accounts/${row.dataset.id}`);
+      });
+    });
+
+    tableBody.querySelectorAll(".toggleArchive").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.id;
+        const action = btn.dataset.action;
+        msg.textContent = action === "archive" ? "Archiving..." : "Unarchiving...";
+        const patch = action === "archive"
+          ? { is_archived: true, archived_at: new Date().toISOString(), archived_by: ctx.user.id, status: "closed" }
+          : { is_archived: false, archived_at: null, archived_by: null, status: "active" };
+        const { error } = await supabase.from("accounts").update(patch).eq("id", id);
+        msg.textContent = error ? `Error: ${error.message}` : (action === "archive" ? "Account archived." : "Account unarchived.");
+        if (!error) await load();
+      });
     });
   }
 
@@ -214,7 +276,7 @@ export async function renderAccounts(appEl, ctx, navigate) {
 
     const { data, error } = await supabase
       .from("accounts")
-      .select("id,title,category,status,created_at")
+      .select("id,title,category,account_kind,is_archived,status,created_at")
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -260,5 +322,7 @@ export async function renderAccounts(appEl, ctx, navigate) {
 
   searchInput.addEventListener("input", renderTable);
   statusFilter.addEventListener("change", renderTable);
+  kindFilter.addEventListener("change", renderTable);
+  showArchived?.addEventListener("change", renderTable);
   await load();
 }
