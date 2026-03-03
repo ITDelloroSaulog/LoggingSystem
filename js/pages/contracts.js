@@ -424,9 +424,9 @@ export async function renderContracts(appEl, ctx) {
             <td><input class="f-remarks" value="${escapeHtml(remarks)}" ${lockAttr} /></td>
             <td class="contract-actions">
               ${inherited
-                ? `<button class="btn btn-primary create-copy">Create Copy</button><div class="muted" style="font-size:11px">Read-only source row</div>`
-                : `<button class="btn btn-primary save-row">Save Copy</button><button class="btn btn-danger delete-row">Delete Copy</button>`
-              }
+            ? `<button class="btn btn-primary create-copy">Create Copy</button><div class="muted" style="font-size:11px">Read-only source row</div>`
+            : `<button class="btn btn-primary save-row">Save Copy</button><button class="btn btn-danger delete-row">Delete Copy</button>`
+          }
               <div class="muted save-msg"></div>
             </td>
           </tr>
@@ -444,7 +444,7 @@ export async function renderContracts(appEl, ctx) {
 
   async function loadData() {
     msgEl.textContent = "Loading contracts...";
-    bodyEl.innerHTML = `<tr><td colspan="11" class="muted">Loading...</td></tr>`;
+    bodyEl.innerHTML = `<tr><td colspan="11" class="loading-state"><span class="spinner spinner-sm"></span> Loading contracts&hellip;</td></tr>`;
 
     const [
       { data: contractsData, error: contractsError },

@@ -111,7 +111,7 @@ export async function renderDashboard(appEl, ctx, navigate) {
     </section>
   `;
 
-  appEl.querySelector("#goActivities").addEventListener("click", () => navigate("#/activities"));
+  appEl.querySelector("#goActivities").addEventListener("click", () => navigate("#/log"));
 
   const listEl = appEl.querySelector("#timelineList");
   const summaryEl = appEl.querySelector("#summaryPanel");
@@ -159,27 +159,48 @@ export async function renderDashboard(appEl, ctx, navigate) {
   if (!rows.length) {
     listEl.innerHTML = `<div class="row"><span class="muted">No activity logged yet for today.</span></div>`;
   } else {
-    listEl.innerHTML = rows.map((x) => {
-      const accountTitle = accountById.get(x.account_id)?.title || "Account";
-      const by = userById.get(x.performed_by || x.created_by);
-      const assignee = extractRetainerAssignee(x.task_category, x.description);
-      const byName = assignee || (by ? (by.full_name || by.email || "-") : "-");
-      const mins = x.minutes ? `${x.minutes}m` : "-";
-      const when = x.occurred_at ? new Date(x.occurred_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+    const groupedByAccount = new Map();
+    for (const r of rows) {
+      if (!groupedByAccount.has(r.account_id)) groupedByAccount.set(r.account_id, []);
+      groupedByAccount.get(r.account_id).push(r);
+    }
 
-      return `
-        <article class="row">
-          <div style="flex:1">
-            <div><strong>${escapeHtml(accountTitle)}</strong></div>
-            <div class="muted">${escapeHtml(x.task_category || "")}</div>
-            <div>${escapeHtml(x.description || "")}</div>
-            <div class="muted">${escapeHtml(when)} | ${escapeHtml(mins)} | ${escapeHtml(byName)}</div>
-            <div style="margin-top:6px"><span class="${statusPillClass(x.status)}">${escapeHtml(x.status || "draft")}</span></div>
+    const sections = [];
+    for (const [accountId, accRows] of groupedByAccount.entries()) {
+      const accountTitle = accountById.get(accountId)?.title || "Account";
+      const accAmount = accRows.reduce((s, x) => s + Number(x.amount || 0), 0);
+
+      const itemsHtml = accRows.map((x) => {
+        const by = userById.get(x.performed_by || x.created_by);
+        const assignee = extractRetainerAssignee(x.task_category, x.description);
+        const byName = assignee || (by ? (by.full_name || by.email || "-") : "-");
+        const mins = x.minutes ? `${x.minutes}m` : "-";
+        const when = x.occurred_at ? new Date(x.occurred_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+
+        return `
+          <div style="display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid #ecf2f8">
+            <div style="flex:1">
+              <div class="muted" style="margin-bottom:4px;font-size:12px">${escapeHtml(when)} | ${escapeHtml(mins)} | ${escapeHtml(byName)}</div>
+              <div style="font-weight:600;color:#173452;margin-bottom:2px">${escapeHtml(x.task_category || "")}</div>
+              <div style="font-size:13px;color:#334155">${escapeHtml(x.description || "")}</div>
+              <div style="margin-top:8px"><span class="${statusPillClass(x.status)}">${escapeHtml(x.status || "draft")}</span></div>
+            </div>
+            <div style="font-weight:700;color:#4d7093">P${asPeso(x.amount)}</div>
           </div>
-          <div style="min-width:110px;text-align:right;font-weight:700;color:#4d7093">P${asPeso(x.amount)}</div>
+        `;
+      }).join("");
+
+      sections.push(`
+        <article class="card" style="margin-bottom:16px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,0.05)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding-bottom:12px;border-bottom:2px solid #e1e8f0">
+            <h3 style="margin:0;color:#0f172a;font-size:16px">${escapeHtml(accountTitle)}</h3>
+            <span style="font-weight:700;color:#1e293b;font-size:15px">P${asPeso(accAmount)} total</span>
+          </div>
+          ${itemsHtml}
         </article>
-      `;
-    }).join("");
+      `);
+    }
+    listEl.innerHTML = sections.join("");
   }
 
   const totalAmount = rows.reduce((sum, x) => sum + Number(x.amount || 0), 0);

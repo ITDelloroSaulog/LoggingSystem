@@ -1,18 +1,12 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from "../supabaseClient.js";
 import { uiConfirm, uiPrompt } from "../ui/modal.js";
+import { escapeHtml } from "../ui/escapeHtml.js";
+import { SUPER_ADMIN_ROLES } from "../router.js";
 
-const SUPER_ADMIN_ROLES = ["super_admin", "admin"];
 const ROLE_OPTIONS = ["staff_encoder", "lawyer", "accountant", "admin", "super_admin"];
 
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/\"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
+
 
 export async function renderAdminUsers(appEl, ctx) {
   if (!SUPER_ADMIN_ROLES.includes(ctx.profile.role)) {
@@ -21,8 +15,14 @@ export async function renderAdminUsers(appEl, ctx) {
   }
 
   appEl.innerHTML = `
-    <div class="card">
-      <h2>Admin - Users</h2>
+    <section class="page-head">
+      <div>
+        <h1 class="page-title">Admin &mdash; Users</h1>
+        <p class="page-sub">Manage user accounts, roles, and access.</p>
+      </div>
+    </section>
+
+    <section class="card" style="margin-bottom:12px">
 
       <div class="grid2">
         <div>
@@ -72,7 +72,7 @@ export async function renderAdminUsers(appEl, ctx) {
       <h3>Users</h3>
       <div class="muted" style="font-size:12px">Delete uses 2-step confirmation and calls <code>public.admin_delete_user(uuid)</code>.</div>
       <div id="list"></div>
-    </div>
+    </section>
   `;
 
   const $ = (s) => appEl.querySelector(s);
@@ -202,7 +202,7 @@ export async function renderAdminUsers(appEl, ctx) {
   });
 
   async function load() {
-    list.innerHTML = `<p class="muted">Loading...</p>`;
+    list.innerHTML = `<div class="loading-state"><span class="spinner spinner-sm"></span> Loading users&hellip;</div>`;
 
     const search = (q.value || "").trim();
     let query = supabase
@@ -234,8 +234,8 @@ export async function renderAdminUsers(appEl, ctx) {
       return `
         <div class="row">
           <div style="flex:1">
-            <div><strong>${label}</strong></div>
-            <div class="muted">${email} - ${role}</div>
+            <div class="muted" style="margin-bottom:4px">${email}</div>
+            <input class="nameInput" data-id="${p.id}" value="${escapeHtml(p.full_name || "")}" placeholder="Full Name" style="width:100%;max-width:260px;margin-bottom:8px" />
           </div>
           <div class="actions" style="flex-wrap:wrap">
             <select class="roleSel" data-id="${p.id}">

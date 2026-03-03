@@ -42,6 +42,25 @@ export const TASK_TO_EXPENSE_TYPE = Object.freeze({
 
 export const TASK_DISPLAY_LABEL = Object.freeze({
   ope_lbc: "Courier",
+  ope_printing: "Printing",
+  ope_envelope: "Envelope",
+  ope_transpo: "Transportation",
+  ope_manhours: "Manhours",
+  notary_fee: "Notary Fee",
+  litigation_filing: "Filing (Litigation)",
+  litigation_appearance: "Court Appearance",
+  litigation_research: "Legal Research",
+  litigation_drafting: "Drafting (Litigation)",
+  litigation_communication: "Communication (Litigation)",
+  retainer_monthly: "Monthly Retainer",
+  retainer_advisory: "Advisory (Retainer)",
+  retainer_drafting: "Drafting (Retainer)",
+  retainer_review: "Review (Retainer)",
+  special_project: "Special Project",
+  contract_agreement: "Contract / Agreement",
+  meeting: "Meeting",
+  communication: "Communication",
+  consultation: "Consultation",
 });
 
 export function normalizeMatterType(rawValue) {

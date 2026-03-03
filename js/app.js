@@ -6,7 +6,7 @@ const navEl = document.getElementById("nav");
 const whoamiEmailEl = document.getElementById("whoamiEmail");
 const whoamiRoleEl = document.getElementById("whoamiRole");
 const logoutBtn = document.getElementById("logoutBtn");
-const PRIMARY_NAV_HREFS = new Set(["#/dashboard", "#/tracker", "#/accounts", "#/activities", "#/prospects"]);
+const PRIMARY_NAV_HREFS = new Set(["#/dashboard", "#/tracker", "#/accounts", "#/activities", "#/log", "#/prospects"]);
 
 let navOutsideCloseBound = false;
 
@@ -86,6 +86,7 @@ function renderNav(ctx) {
     { href: "#/tracker", label: "Tracker", roles: STAFF_ROLES },
     { href: "#/accounts", label: "Accounts", roles: STAFF_ROLES },
     { href: "#/activities", label: "Activities", roles: STAFF_ROLES },
+    { href: "#/log", label: "Log Activity", roles: STAFF_ROLES },
     { href: "#/prospects", label: "Prospects", roles: STAFF_ROLES },
     { href: "#/reports", label: "Reports", roles: STAFF_ROLES },
     { href: "#/contracts", label: "Contracts", roles: STAFF_ROLES },
@@ -126,7 +127,7 @@ function renderNav(ctx) {
   bindNavOutsideClose();
 
   if (!location.hash) {
-    navigate("#/tracker");
+    navigate("#/dashboard");
   }
   syncActiveNav();
 }

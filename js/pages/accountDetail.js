@@ -1,26 +1,45 @@
 import { supabase } from "../supabaseClient.js";
 import { escapeHtml } from "../ui/escapeHtml.js";
-
-const SUPER_ADMIN_ROLES = ["super_admin", "admin"];
-
+import { SUPER_ADMIN_ROLES } from "../router.js";
+import { navigate } from "../router.js";
 
 export async function renderAccountDetail(appEl, ctx, accountId) {
   appEl.innerHTML = `
-    <div class="card">
-      <h2>Account</h2>
+    <section class="page-head">
+      <div>
+        <h1 class="page-title">Account Detail</h1>
+        <p class="page-sub">View account information, matters, and recent activities.</p>
+      </div>
+      <button id="backBtn" class="btn">&larr; Back to Accounts</button>
+    </section>
+
+    <section class="card" style="margin-bottom:12px">
       <div id="info"></div>
       <div id="adminAssign"></div>
-      <hr/>
-      <h3>Recent Activities</h3>
+    </section>
+
+    <section class="card" style="margin-bottom:12px">
+      <h3 style="margin-top:2px">Matters</h3>
+      <div id="matters"></div>
+    </section>
+
+    <section class="card" style="margin-bottom:12px">
+      <h3 style="margin-top:2px">Recent Activities</h3>
       <div id="acts"></div>
-      <p id="msg" class="msg"></p>
-    </div>
+    </section>
+
+    <p id="msg" class="msg"></p>
   `;
 
-  const info = appEl.querySelector("#info");
-  const adminAssign = appEl.querySelector("#adminAssign");
-  const acts = appEl.querySelector("#acts");
-  const msg = appEl.querySelector("#msg");
+  const $ = (sel) => appEl.querySelector(sel);
+  const info = $("#info");
+  const adminAssign = $("#adminAssign");
+  const mattersEl = $("#matters");
+  const acts = $("#acts");
+  const msg = $("#msg");
+  const backBtn = $("#backBtn");
+
+  backBtn.addEventListener("click", () => navigate("#/accounts"));
 
   // Load account
   const { data: account, error: aErr } = await supabase
@@ -34,24 +53,48 @@ export async function renderAccountDetail(appEl, ctx, accountId) {
     return;
   }
 
+  const createdDate = account.created_at
+    ? new Date(account.created_at).toLocaleDateString()
+    : "-";
+
   info.innerHTML = `
-    <p><strong>${escapeHtml(account.title)}</strong></p>
-    <p class="muted">${escapeHtml(account.category)} | ${escapeHtml(account.account_kind || "-")} - ${escapeHtml(account.is_archived ? "archived" : account.status)}</p>
-    <p class="muted">ID: ${escapeHtml(account.id)}</p>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+      <h2 style="margin:0">${escapeHtml(account.title)}</h2>
+      <span class="status-pill ${account.is_archived ? "rejected" : "approved"}">${escapeHtml(account.is_archived ? "Archived" : account.status || "Active")}</span>
+    </div>
+    <div class="kpi-grid" style="margin-bottom:12px">
+      <article class="kpi-card">
+        <div class="kpi-label">Category</div>
+        <div class="kpi-value" style="font-size:18px">${escapeHtml(account.category || "-")}</div>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-label">Account Kind</div>
+        <div class="kpi-value" style="font-size:18px">${escapeHtml(account.account_kind || "-")}</div>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-label">Created</div>
+        <div class="kpi-value" style="font-size:18px">${escapeHtml(createdDate)}</div>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-label">ID</div>
+        <div class="kpi-value" style="font-size:12px;word-break:break-all">${escapeHtml(account.id)}</div>
+      </article>
+    </div>
   `;
 
   // Admin-only member assignment (by email search)
   if (SUPER_ADMIN_ROLES.includes(ctx.profile.role)) {
     adminAssign.innerHTML = `
+      <hr/>
       <h3>Assign Member (Admin only)</h3>
       <form id="assignForm" class="stack">
         <label>Search staff email</label>
-        <input id="searchEmail" placeholder="e.g., lawyer@firm.com" />
-        <button type="button" id="searchBtn">Search</button>
-
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="searchEmail" placeholder="e.g., lawyer@firm.com" style="flex:1" />
+          <button type="button" id="searchBtn" class="btn">Search</button>
+        </div>
         <div id="results"></div>
       </form>
-      <hr/>
     `;
 
     const searchBtn = adminAssign.querySelector("#searchBtn");
@@ -107,6 +150,46 @@ export async function renderAccountDetail(appEl, ctx, accountId) {
     });
   }
 
+  // Load matters for this account
+  mattersEl.innerHTML = `<p class="muted">Loading matters...</p>`;
+  const { data: mattersData, error: matErr } = await supabase
+    .from("matters")
+    .select("id,title,matter_type,status,handling_lawyer_id,created_at")
+    .eq("account_id", accountId)
+    .order("created_at", { ascending: false })
+    .limit(50);
+
+  if (matErr) {
+    mattersEl.innerHTML = `<p class="msg">Error loading matters: ${matErr.message}</p>`;
+  } else if (!mattersData?.length) {
+    mattersEl.innerHTML = `<p class="muted">No matters found for this account.</p>`;
+  } else {
+    mattersEl.innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Title</th>
+              <th>Type</th>
+              <th>Status</th>
+              <th>Created</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${mattersData.map((m) => `
+              <tr>
+                <td><strong>${escapeHtml(m.title || "-")}</strong></td>
+                <td>${escapeHtml(m.matter_type || "-")}</td>
+                <td><span class="status-pill">${escapeHtml(m.status || "-")}</span></td>
+                <td>${m.created_at ? new Date(m.created_at).toLocaleDateString() : "-"}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
   // Load activities
   msg.textContent = "Loading activities...";
   const { data: activities, error: actErr } = await supabase
@@ -114,7 +197,7 @@ export async function renderAccountDetail(appEl, ctx, accountId) {
     .select("id,fee_code,task_category,description,amount,minutes,status,occurred_at,created_at")
     .eq("account_id", accountId)
     .order("created_at", { ascending: false })
-    .limit(25);
+    .limit(50);
 
   if (actErr) {
     msg.textContent = `Error: ${actErr.message}`;
@@ -127,16 +210,57 @@ export async function renderAccountDetail(appEl, ctx, accountId) {
     return;
   }
 
-  acts.innerHTML = activities
-    .map(
-      (x) => `
-      <div class="row">
-        <div>
-          <div><strong>${escapeHtml(x.fee_code || "")}</strong> <span class="muted">- ${escapeHtml(x.task_category || "")} - ${escapeHtml(x.status || "")}</span></div>
-          <div>${escapeHtml(x.description || "")}</div>
-          <div class="muted">${x.minutes ? `${x.minutes} min - ` : ""}${x.occurred_at ? new Date(x.occurred_at).toLocaleString() : ""}${x.amount != null ? ` - P${Number(x.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : ""}</div>
-        </div>
-      </div>`
-    )
-    .join("");
+  // Calculate activity stats
+  const totalAmount = activities.reduce((s, x) => s + Number(x.amount || 0), 0);
+  const totalMinutes = activities.reduce((s, x) => s + Number(x.minutes || 0), 0);
+  const approvedCount = activities.filter((x) => ["approved", "billed", "completed"].includes(x.status)).length;
+
+  acts.innerHTML = `
+    <div class="kpi-grid" style="margin-bottom:12px">
+      <article class="kpi-card">
+        <div class="kpi-label">Activities</div>
+        <div class="kpi-value">${activities.length}</div>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-label">Total Value</div>
+        <div class="kpi-value">P${totalAmount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-label">Total Time</div>
+        <div class="kpi-value">${(totalMinutes / 60).toFixed(1)}h</div>
+      </article>
+      <article class="kpi-card">
+        <div class="kpi-label">Approved+</div>
+        <div class="kpi-value" style="color:#118a4a">${approvedCount}</div>
+      </article>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Fee Code</th>
+            <th>Category</th>
+            <th>Description</th>
+            <th>Status</th>
+            <th>Amount</th>
+            <th>Time</th>
+            <th>Date</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${activities.map((x) => `
+            <tr>
+              <td><strong>${escapeHtml(x.fee_code || "-")}</strong></td>
+              <td>${escapeHtml(x.task_category || "-")}</td>
+              <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(x.description || "")}">${escapeHtml(x.description || "-")}</td>
+              <td><span class="status-pill">${escapeHtml(x.status || "-")}</span></td>
+              <td>P${Number(x.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</td>
+              <td>${x.minutes ? `${x.minutes}m` : "-"}</td>
+              <td>${x.occurred_at ? new Date(x.occurred_at).toLocaleDateString() : "-"}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
 }

@@ -494,20 +494,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
               Each row creates one activity log entry. OPE/Notary rows are cost/expense-type activity entries and require receipts. Man Hour is treated like a normal amount (no timekeeping).
             </div>
 
-            <div class="table-wrap">
-              <table class="entries-table">
-                <thead>
-                  <tr>
-                    <th style="width:190px">Activity / Cost</th>
-                    <th style="width:140px">Amount (PHP)</th>
-                    <th>Notes</th>
-                    <th style="width:210px">Receipt</th>
-                    <th style="width:110px">Row</th>
-                  </tr>
-                </thead>
-                <tbody id="entriesBody"></tbody>
-              </table>
-            </div>
+            <div id="entriesBody" style="display:flex; flex-direction:column; gap:8px;"></div>
             <div class="field-error" data-for="entries"></div>
 
             <div class="activity-entry-actions">
@@ -560,10 +547,6 @@ export async function renderLogActivity(appEl, ctx, navigate) {
       <h3 style="margin:0 0 10px">My Drafts</h3>
       <div id="drafts"></div>
 
-      <hr/>
-
-      <h3 style="margin:0 0 10px">Recent Activity (Visible to you)</h3>
-      <div id="recent"></div>
     </div>
   `;
 
@@ -611,7 +594,6 @@ export async function renderLogActivity(appEl, ctx, navigate) {
   const step3Msg = $("#msg3");
   const msg = $("#msg");
   const draftsEl = $("#drafts");
-  const recentEl = $("#recent");
 
   // State
   let isBusy = false;
@@ -777,7 +759,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
 
   function clearErrors() {
     ["account_id", "matter_id", "occurred_on", "handling_lawyer_id", "entries"].forEach((k) => setFieldError(k, ""));
-    entriesBody.querySelectorAll("tr").forEach((tr) => tr.classList.remove("invalid-row"));
+    entriesBody.querySelectorAll(".entry-row").forEach((tr) => tr.classList.remove("invalid-row"));
   }
 
   function setStep(step) {
@@ -792,38 +774,49 @@ export async function renderLogActivity(appEl, ctx, navigate) {
   function buildRow(lineNo, opts = {}) {
     const categoryOptions = buildCategoryOptions();
     return `
-      <tr data-line-no="${lineNo}">
-        <td>
-          <select class="cat">${categoryOptions}</select>
-          <div class="row-cues"></div>
-          <div class="row-error"></div>
-        </td>
-        <td>
-          <input class="amt" type="number" min="0" step="0.01" placeholder="0.00" />
-        </td>
-        <td>
-          <input class="notes" placeholder="Optional (recommended)" />
-        </td>
-        <td>
-          <div class="receiptCell">
-            <button type="button" class="btn btn-ghost uploadBtn">Upload</button>
-            <span class="receiptOptional muted" style="font-size:12px;display:none">
-              Optional <a href="#" class="addOptional">Add</a>
-            </span>
-            <input class="file" type="file" style="display:none" multiple accept=".pdf,image/*" />
-            <div class="receiptList muted" style="font-size:12px;margin-top:6px"></div>
+      <div class="tracker-card entry-row" data-line-no="${lineNo}" style="margin-bottom:12px; border:1px solid #e2e8f0; box-shadow:none;">
+        <div class="tracker-card-header" style="background:#f8fafc; padding:12px 16px;">
+          <strong style="color:#334155;">Entry #${lineNo}</strong>
+          <div style="display:flex;gap:8px">
+            <button type="button" class="btn btn-ghost clearRow" style="padding:4px 8px;font-size:12px;">Clear</button>
+            ${opts.removable ? `<button type="button" class="btn btn-danger removeRow" style="padding:4px 8px;font-size:12px;">Remove</button>` : ""}
           </div>
-        </td>
-        <td style="text-align:right">
-          <button type="button" class="btn btn-ghost clearRow">Clear</button>
-          ${opts.removable ? `<button type="button" class="btn btn-ghost removeRow">Remove</button>` : ""}
-        </td>
-      </tr>
+        </div>
+        <div class="tracker-card-body">
+          <div class="tracker-card-fields" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); align-items: start;">
+            <div class="tracker-field">
+              <label class="tracker-field-label">Category</label>
+              <select class="cat" style="width:100%;">${categoryOptions}</select>
+              <div class="row-cues" style="margin-top:6px;"></div>
+              <div class="row-error field-error" style="margin-top:4px;display:none;"></div>
+            </div>
+            <div class="tracker-field">
+              <label class="tracker-field-label">Amount (₱)</label>
+              <input class="amt" type="number" min="0" step="0.01" placeholder="0.00" style="width:100%;" />
+            </div>
+            <div class="tracker-field tracker-field-wide">
+              <label class="tracker-field-label">Notes</label>
+              <input class="notes" placeholder="Optional (recommended)" style="width:100%;" />
+            </div>
+            <div class="tracker-field tracker-field-wide receiptCell">
+              <label class="tracker-field-label">Receipts</label>
+              <div style="display:flex;align-items:center;gap:12px;">
+                <button type="button" class="btn btn-ghost uploadBtn">Upload</button>
+                <span class="receiptOptional muted" style="font-size:12px;display:none">
+                  Optional <a href="#" class="addOptional">Add</a>
+                </span>
+                <input class="file" type="file" style="display:none" multiple accept=".pdf,image/*" />
+              </div>
+              <div class="receiptList muted" style="font-size:12px;margin-top:8px;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
     `;
   }
 
   function ensureRows(n) {
-    const current = entriesBody.querySelectorAll("tr").length;
+    const current = entriesBody.querySelectorAll(".entry-row").length;
     const target = Math.max(1, Math.min(MAX_ROWS, n));
     for (let i = current + 1; i <= target; i++) addRow({ removable: false, focus: false });
   }
@@ -935,7 +928,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
     rowCount += 1;
     const lineNo = rowCount;
     entriesBody.insertAdjacentHTML("beforeend", buildRow(lineNo, { removable }));
-    const tr = entriesBody.querySelector(`tr[data-line-no="${lineNo}"]`);
+    const tr = entriesBody.querySelector(`.entry-row[data-line-no="${lineNo}"]`);
     wireRow(tr);
     if (focus) tr.querySelector(".cat")?.focus();
     updateUi();
@@ -1027,7 +1020,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
   }
 
   function collectEntries() {
-    const rows = Array.from(entriesBody.querySelectorAll("tr"));
+    const rows = Array.from(entriesBody.querySelectorAll(".entry-row"));
     return rows.map((tr) => {
       const line_no = Number(tr.dataset.lineNo || 0);
       const task_category = tr.querySelector(".cat").value;
@@ -1116,23 +1109,6 @@ export async function renderLogActivity(appEl, ctx, navigate) {
 
     if (!handlingSel.value) { if (showErrors) setFieldError("handling_lawyer_id", "Handling Lawyer is required to submit."); ok = false; }
 
-    if (showErrors) {
-      for (const e of draft.entries) {
-        const meta = getCategoryMeta(e.task_category);
-        if (meta?.needs_receipt && (!e.receipts || e.receipts.length === 0)) {
-          e.tr.classList.add("invalid-row");
-          e.tr.querySelector(".row-error").textContent = "Receipt required.";
-          ok = false;
-        }
-      }
-    } else {
-      for (const e of draft.entries) {
-        const meta = getCategoryMeta(e.task_category);
-        if (meta?.needs_receipt && (!e.receipts || e.receipts.length === 0)) ok = false;
-      }
-      if (!handlingSel.value) ok = false;
-    }
-
     return { ok, entries: draft.entries };
   }
 
@@ -1212,6 +1188,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
         description: desc,
         occurred_at,
         attachment_urls: e.receipts && e.receipts.length ? e.receipts : null,
+        missing_receipt: !!(meta?.needs_receipt && (!e.receipts || e.receipts.length === 0)),
 
         submitted_at,
         draft_expires_at,
@@ -1254,9 +1231,30 @@ export async function renderLogActivity(appEl, ctx, navigate) {
     if (isBusy) return;
     const v = validateSubmit({ showErrors: true });
     if (!v.ok) {
-      step3Msg.textContent = "Fix the highlighted rows (especially receipts) before submitting.";
+      step3Msg.textContent = "Fix the highlighted rows before submitting.";
       updateUi();
       return;
+    }
+
+    let hasMissingReceipts = false;
+    let missingReceiptCategory = "";
+    for (const e of v.entries) {
+      const meta = getCategoryMeta(e.task_category);
+      if (meta?.needs_receipt && (!e.receipts || e.receipts.length === 0)) {
+        hasMissingReceipts = true;
+        missingReceiptCategory = meta.label || "Expense";
+        break;
+      }
+    }
+
+    if (hasMissingReceipts) {
+      const okMissing = await uiConfirm({
+        title: "Missing Receipt",
+        message: `No receipt attached for an OPEX entry (${missingReceiptCategory}). Continue anyway?`,
+        confirmText: "Continue without Receipt",
+        danger: true,
+      });
+      if (!okMissing) return;
     }
 
     const ok = await uiConfirm({
@@ -1316,35 +1314,45 @@ export async function renderLogActivity(appEl, ctx, navigate) {
           </div>
           <div class="review-receipt-meta">Date: <strong>${escapeHtml(receiptDate)}</strong></div>
         </div>
-        <div class="table-wrap" style="margin-top:10px">
-          <table>
-            <thead>
-              <tr>
-                <th>Item</th>
-                <th>Type</th>
-                <th>Amount</th>
-                <th>Notes</th>
-                <th>Receipt</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${entries.map((e) => {
-                const meta = getCategoryMeta(e.task_category);
-                const kind = rowKindMeta(e.task_category);
-                const needs = meta?.needs_receipt;
-                const has = e.receipts && e.receipts.length > 0;
-                return `
-                  <tr>
-                    <td><strong>${escapeHtml(displayCategoryLabel(e.task_category))}</strong></td>
-                    <td>${kind ? `<span class="${kind.pillClass}">${escapeHtml(kind.label)}</span>` : `<span class="muted">-</span>`}</td>
-                    <td>P${peso(e.amount)}</td>
-                    <td>${escapeHtml(e.notes || "")}</td>
-                    <td>${needs ? (has ? `<span class="status-pill completed">ok</span>` : `<span class="status-pill rejected">missing</span>`) : `<span class="muted">optional</span>`}</td>
-                  </tr>
-                `;
-              }).join("")}
-            </tbody>
-          </table>
+        <div style="margin-top:16px; display:flex; flex-direction:column; gap:8px;">
+          ${entries.map((e, idx) => {
+      const meta = getCategoryMeta(e.task_category);
+      const kind = rowKindMeta(e.task_category);
+      const needs = meta?.needs_receipt;
+      const has = e.receipts && e.receipts.length > 0;
+      return `
+              <div class="tracker-card" style="margin-bottom:0; border:1px solid #e2e8f0; box-shadow:none;">
+                <div class="tracker-card-header" style="background:#f8fafc; padding:8px 16px;">
+                  <strong style="color:#334155; font-size:13px;">Entry #${idx + 1}</strong>
+                </div>
+                <div class="tracker-card-body" style="padding:12px 16px;">
+                  <div class="tracker-card-fields" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">
+                    <div class="tracker-field">
+                      <span class="tracker-field-label">Item</span>
+                      <strong style="font-size:14px;">${escapeHtml(displayCategoryLabel(e.task_category))}</strong>
+                    </div>
+                    <div class="tracker-field">
+                      <span class="tracker-field-label">Type</span>
+                      <div>${kind ? `<span class="${kind.pillClass}">${escapeHtml(kind.label)}</span>` : `<span class="muted">-</span>`}</div>
+                    </div>
+                    <div class="tracker-field">
+                      <span class="tracker-field-label">Amount</span>
+                      <strong style="font-size:14px; color:#1e293b;">P${peso(e.amount)}</strong>
+                    </div>
+                    <div class="tracker-field">
+                      <span class="tracker-field-label">Receipt</span>
+                      <div>${needs ? (has ? `<span class="status-pill completed">Attached</span>` : `<span class="status-pill rejected">Missing</span>`) : `<span class="muted">Optional</span>`}</div>
+                    </div>
+                    ${e.notes ? `
+                    <div class="tracker-field tracker-field-wide">
+                      <span class="tracker-field-label">Notes</span>
+                      <div style="font-size:13px; color:#334155;">${escapeHtml(e.notes)}</div>
+                    </div>` : ""}
+                  </div>
+                </div>
+              </div>
+            `;
+    }).join("")}
         </div>
         <div class="review-receipt-foot">
           <div class="review-receipt-total-label">Total</div>
@@ -1840,24 +1848,46 @@ export async function renderLogActivity(appEl, ctx, navigate) {
       : { data: [] };
     const accById = new Map((accRes.data || []).map((a) => [a.id, a]));
 
-    draftsEl.innerHTML = batches.map((b) => {
+    draftsEl.innerHTML = `
+      <div style="display:flex; flex-direction:column; gap:12px;">
+      ${batches.map((b) => {
       const acc = accById.get(b.account_id);
       const title = acc ? `${acc.title} (${acc.category || "-"})` : "Account";
       const when = b.occurredAt ? new Date(b.occurredAt).toLocaleDateString() : "";
       return `
-        <div class="row" style="align-items:flex-start">
-          <div style="flex:1">
-            <div><strong>${escapeHtml(title)}</strong></div>
-            <div class="muted" style="font-size:12px">${escapeHtml(when)} - ${b.count} row(s)</div>
-            <div style="margin-top:6px"><strong>P${peso(b.total)}</strong></div>
+          <div class="tracker-card" style="margin-bottom:0px">
+            <div class="tracker-card-header">
+              <span class="tracker-card-id" style="font-family:monospace">DRAFT ${escapeHtml(String(b.key).split("-")[0].toUpperCase())}</span>
+              <span class="status-pill draft">Draft</span>
+              <div class="tracker-card-actions" style="font-size:13px;color:#4d7093;font-weight:600">
+                P${peso(b.total)}
+              </div>
+            </div>
+            <div class="tracker-card-body">
+              <div class="tracker-card-fields" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+                <div class="tracker-field">
+                  <span class="tracker-field-label">Account</span>
+                  <strong style="font-size:14px;color:#1e293b;">${escapeHtml(title)}</strong>
+                </div>
+                <div class="tracker-field">
+                  <span class="tracker-field-label">Date</span>
+                  <div style="font-size:14px;color:#1e293b;font-weight:500">${escapeHtml(when)}</div>
+                </div>
+                <div class="tracker-field">
+                  <span class="tracker-field-label">Items</span>
+                  <div style="font-size:14px;color:#1e293b;">${b.count} row(s)</div>
+                </div>
+                <div class="tracker-field" style="display:flex; gap:8px; align-items:center; justify-content:flex-end;">
+                  <button class="btn openDraft" data-batch="${escapeHtml(b.key)}">Resume</button>
+                  <button class="btn btn-danger deleteDraft" data-batch="${escapeHtml(b.key)}">Delete</button>
+                </div>
+              </div>
+            </div>
           </div>
-          <div class="actions">
-            <button class="btn openDraft" data-batch="${escapeHtml(b.key)}">Open</button>
-            <button class="btn btn-danger deleteDraft" data-batch="${escapeHtml(b.key)}">Delete</button>
-          </div>
-        </div>
-      `;
-    }).join("");
+        `;
+    }).join("")}
+      </div>
+    `;
 
     draftsEl.querySelectorAll(".openDraft").forEach((btn) => {
       btn.addEventListener("click", async () => {
@@ -2067,71 +2097,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
     }
   }
 
-  async function loadRecent() {
-    recentEl.innerHTML = `<p class="muted">Loading...</p>`;
 
-    const { data, error } = await supabase
-      .from("activities")
-      .select("id,account_id,task_category,description,amount,status,occurred_at,created_at")
-      .order("created_at", { ascending: false })
-      .limit(20);
-
-    if (error) {
-      recentEl.innerHTML = `<p class="msg">Error: ${escapeHtml(error.message)}</p>`;
-      return;
-    }
-
-    const rows = data || [];
-    if (!rows.length) {
-      recentEl.innerHTML = `<p class="muted">No activity yet.</p>`;
-      return;
-    }
-
-    const accountIds = Array.from(new Set(rows.map((r) => r.account_id).filter(Boolean)));
-    const accRes = accountIds.length
-      ? await supabase.from("accounts").select("id,title,category").in("id", accountIds)
-      : { data: [] };
-    const accById = new Map((accRes.data || []).map((a) => [a.id, a]));
-
-    recentEl.innerHTML = `
-      <div class="table-wrap recent-activities-wrap">
-        <table class="recent-activities-table">
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Client</th>
-              <th>Category</th>
-              <th>Description</th>
-              <th>Status</th>
-              <th style="text-align:right">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map((x) => {
-              const acc = accById.get(x.account_id);
-              const title = acc ? `${acc.title} (${acc.category || "-"})` : "Account";
-              const categoryLabel = displayCategoryLabel(x.task_category);
-              const when = x.occurred_at
-                ? new Date(x.occurred_at).toLocaleString([], { year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" })
-                : "-";
-              const status = String(x.status || "draft").toLowerCase();
-              const desc = String(x.description || "").trim() || "-";
-              return `
-                <tr>
-                  <td class="recent-when">${escapeHtml(when)}</td>
-                  <td class="recent-client">${escapeHtml(title)}</td>
-                  <td>${escapeHtml(categoryLabel)}</td>
-                  <td class="recent-desc" title="${escapeHtml(desc)}">${escapeHtml(desc)}</td>
-                  <td><span class="${recentStatusPillClass(status)}">${escapeHtml(status)}</span></td>
-                  <td style="text-align:right;font-weight:700">P${peso(x.amount)}</td>
-                </tr>
-              `;
-            }).join("")}
-          </tbody>
-        </table>
-      </div>
-    `;
-  }
 
   // Init wiring
   dateInput.value = toLocalDateInputValue(new Date());
@@ -2150,7 +2116,7 @@ export async function renderLogActivity(appEl, ctx, navigate) {
       await loadMembersForAccount(accountSel.value);
     }
     msg.textContent = "";
-    await Promise.all([loadDraftBatches(), loadRecent()]);
+    await loadDraftBatches();
   } catch (e) {
     msg.textContent = `Error: ${e?.message || e}`;
   }

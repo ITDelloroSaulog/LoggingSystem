@@ -1,8 +1,7 @@
 import { escapeHtml } from "../ui/escapeHtml.js";
 import { supabase } from "../supabaseClient.js";
 import { uiConfirm, uiPrompt } from "../ui/modal.js";
-
-const SUPER_ADMIN_ROLES = ["super_admin", "admin"];
+import { SUPER_ADMIN_ROLES } from "../router.js";
 const GROUP_CODE_RE = /^[A-Z0-9_]{2,12}$/;
 const RATE_CODE_RE = /^[A-Z0-9_]{3,40}$/;
 const DEFAULT_UNITS = ["flat", "hour"];
@@ -145,23 +144,7 @@ export async function renderAdminRates(appEl, ctx) {
       </div>
 
       <section class="kpi-grid rates-kpis" id="ratesKpis"></section>
-      <div class="table-wrap">
-        <table class="rates-table">
-          <thead>
-            <tr>
-              <th>Group</th>
-              <th>Code</th>
-              <th>Label</th>
-              <th>Unit</th>
-              <th>Amount</th>
-              <th>Sort</th>
-              <th>Status</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody id="ratesBody"></tbody>
-        </table>
-      </div>
+      <div id="ratesBody" style="display:flex; flex-direction:column; gap:12px;"></div>
       <p id="msg" class="msg"></p>
     </section>
   `;
@@ -197,15 +180,15 @@ export async function renderAdminRates(appEl, ctx) {
     };
   }
 
-  function parseEditPayload(tr) {
+  function parseEditPayload(card) {
     return {
-      group_code: normalizeCode(tr.querySelector(".e-group")?.value),
-      code: normalizeCode(tr.querySelector(".e-code")?.value),
-      label: clean(tr.querySelector(".e-label")?.value),
-      unit: clean(tr.querySelector(".e-unit")?.value).toLowerCase() || "flat",
-      amount: toNum(tr.querySelector(".e-amount")?.value, 0),
-      sort: toInt(tr.querySelector(".e-sort")?.value, 0),
-      is_active: tr.querySelector(".e-active")?.value === "true",
+      group_code: normalizeCode(card.querySelector(".e-group")?.value),
+      code: normalizeCode(card.querySelector(".e-code")?.value),
+      label: clean(card.querySelector(".e-label")?.value),
+      unit: clean(card.querySelector(".e-unit")?.value).toLowerCase() || "flat",
+      amount: toNum(card.querySelector(".e-amount")?.value, 0),
+      sort: toInt(card.querySelector(".e-sort")?.value, 0),
+      is_active: card.querySelector(".e-active")?.value === "true",
     };
   }
 
@@ -274,7 +257,7 @@ export async function renderAdminRates(appEl, ctx) {
     renderKpis(filtered);
 
     if (!filtered.length) {
-      bodyEl.innerHTML = `<tr><td colspan="8" class="muted">No rates found.</td></tr>`;
+      bodyEl.innerHTML = `<div class="muted">No rates found.</div>`;
       return;
     }
 
@@ -287,49 +270,89 @@ export async function renderAdminRates(appEl, ctx) {
 
         if (isEditing) {
           return `
-            <tr data-id="${r.id}">
-              <td><input class="e-group" value="${escapeHtml(clean(r.group_code))}" maxlength="12" /></td>
-              <td><input class="e-code" value="${escapeHtml(clean(r.code))}" maxlength="40" /></td>
-              <td><input class="e-label" value="${escapeHtml(clean(r.label))}" maxlength="120" /></td>
-              <td><select class="e-unit">${unitOptions(r.unit)}</select></td>
-              <td><input class="e-amount" type="number" min="0.01" step="0.01" value="${Number(r.amount || 0)}" /></td>
-              <td><input class="e-sort" type="number" min="0" max="999" step="1" value="${toInt(r.sort, 0)}" /></td>
-              <td>
-                <select class="e-active">
-                  <option value="true" ${r.is_active ? "selected" : ""}>active</option>
-                  <option value="false" ${!r.is_active ? "selected" : ""}>inactive</option>
-                </select>
-              </td>
-              <td class="rates-actions">
-                <button class="btn btn-primary save-edit" type="button">Save</button>
-                <button class="btn cancel-edit" type="button">Cancel</button>
-              </td>
-            </tr>
+            <div class="tracker-card" data-id="${r.id}" style="border: 2px solid #3b82f6;">
+              <div class="tracker-card-body">
+                <div class="tracker-card-fields" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">
+                  <div class="tracker-field">
+                    <span class="tracker-field-label">Group</span>
+                    <input class="e-group" value="${escapeHtml(clean(r.group_code))}" maxlength="12" style="width:100%" />
+                  </div>
+                  <div class="tracker-field">
+                    <span class="tracker-field-label">Code</span>
+                    <input class="e-code" value="${escapeHtml(clean(r.code))}" maxlength="40" style="width:100%" />
+                  </div>
+                  <div class="tracker-field">
+                    <span class="tracker-field-label">Label</span>
+                    <input class="e-label" value="${escapeHtml(clean(r.label))}" maxlength="120" style="width:100%" />
+                  </div>
+                  <div class="tracker-field">
+                    <span class="tracker-field-label">Unit</span>
+                    <select class="e-unit" style="width:100%">${unitOptions(r.unit)}</select>
+                  </div>
+                  <div class="tracker-field">
+                    <span class="tracker-field-label">Amount</span>
+                    <input class="e-amount" type="number" min="0.01" step="0.01" value="${Number(r.amount || 0)}" style="width:100%" />
+                  </div>
+                  <div class="tracker-field">
+                    <span class="tracker-field-label">Sort</span>
+                    <input class="e-sort" type="number" min="0" max="999" step="1" value="${toInt(r.sort, 0)}" style="width:100%" />
+                  </div>
+                  <div class="tracker-field">
+                    <span class="tracker-field-label">Status</span>
+                    <select class="e-active" style="width:100%">
+                      <option value="true" ${r.is_active ? "selected" : ""}>active</option>
+                      <option value="false" ${!r.is_active ? "selected" : ""}>inactive</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="rates-actions" style="margin-top:12px; display:flex; gap:8px;">
+                  <button class="btn btn-primary save-edit" type="button">Save</button>
+                  <button class="btn cancel-edit" type="button">Cancel</button>
+                </div>
+              </div>
+            </div>
           `;
         }
 
         return `
-          <tr data-id="${r.id}" data-code="${escapeHtml(clean(r.code))}" data-active="${r.is_active ? "1" : "0"}">
-            <td><strong>${escapeHtml(clean(r.group_code))}</strong></td>
-            <td><code>${escapeHtml(clean(r.code))}</code></td>
-            <td>${escapeHtml(clean(r.label))}</td>
-            <td>${escapeHtml(clean(r.unit))}</td>
-            <td><strong>P${peso(r.amount)}</strong></td>
-            <td>${toInt(r.sort, 0)}</td>
-            <td>${statusPill}</td>
-            <td class="rates-actions">
-              <button class="btn edit-row" type="button">Edit</button>
-              <button class="btn toggle-row" type="button">${r.is_active ? "Disable" : "Enable"}</button>
-              <button class="btn btn-danger delete-row" type="button" ${r.is_active ? "disabled title='Disable first to prevent accidental deletion'" : ""}>Delete</button>
-            </td>
-          </tr>
+          <div class="tracker-card" data-id="${r.id}" data-code="${escapeHtml(clean(r.code))}" data-active="${r.is_active ? "1" : "0"}">
+            <div class="tracker-card-header">
+              <span class="tracker-card-id"><code>${escapeHtml(clean(r.code))}</code></span>
+              ${statusPill}
+              <div class="tracker-card-actions">
+                <button class="btn edit-row" type="button">Edit</button>
+                <button class="btn toggle-row" type="button">${r.is_active ? "Disable" : "Enable"}</button>
+                <button class="btn btn-danger delete-row" type="button" ${r.is_active ? "disabled title='Disable first to prevent accidental deletion'" : ""}>Delete</button>
+              </div>
+            </div>
+            <div class="tracker-card-body">
+              <div class="tracker-card-fields" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">
+                <div class="tracker-field">
+                  <span class="tracker-field-label">Group</span>
+                  <strong>${escapeHtml(clean(r.group_code))}</strong>
+                </div>
+                <div class="tracker-field tracker-field-wide">
+                  <span class="tracker-field-label">Label</span>
+                  <div style="font-size:14px; color:#1e293b;">${escapeHtml(clean(r.label))}</div>
+                </div>
+                <div class="tracker-field">
+                  <span class="tracker-field-label">Amount</span>
+                  <strong style="font-size:14px; color:#1e293b;">P${peso(r.amount)} <span class="muted" style="font-weight:normal;font-size:12px">/${escapeHtml(clean(r.unit))}</span></strong>
+                </div>
+                <div class="tracker-field">
+                  <span class="tracker-field-label">Sort Order</span>
+                  <div style="font-size:14px; color:#334155;">${toInt(r.sort, 0)}</div>
+                </div>
+              </div>
+            </div>
+          </div>
         `;
       })
       .join("");
   }
 
   async function load() {
-    bodyEl.innerHTML = `<tr><td colspan="8" class="muted">Loading...</td></tr>`;
+    bodyEl.innerHTML = `<div class="loading-state"><span class="spinner spinner-sm"></span> Loading rates&hellip;</div>`;
     const { data, error } = await supabase
       .from("rates")
       .select("id,group_code,code,label,unit,amount,is_active,sort")
@@ -406,9 +429,9 @@ export async function renderAdminRates(appEl, ctx) {
   });
 
   bodyEl.addEventListener("click", async (e) => {
-    const tr = e.target.closest("tr[data-id]");
-    if (!tr) return;
-    const id = tr.dataset.id;
+    const card = e.target.closest(".tracker-card[data-id]");
+    if (!card) return;
+    const id = card.dataset.id;
     if (!id) return;
 
     const editBtn = e.target.closest(".edit-row");
@@ -427,7 +450,7 @@ export async function renderAdminRates(appEl, ctx) {
 
     const saveBtn = e.target.closest(".save-edit");
     if (saveBtn) {
-      const payload = parseEditPayload(tr);
+      const payload = parseEditPayload(card);
       const validationError = validatePayload(payload);
       if (validationError) {
         msg.textContent = `Error: ${validationError}`;

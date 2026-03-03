@@ -1,8 +1,7 @@
 import { supabase } from "../supabaseClient.js";
 import { escapeHtml } from "../ui/escapeHtml.js";
 import { uiPrompt } from "../ui/modal.js";
-
-const SUPER_ADMIN_ROLES = ["super_admin", "admin"];
+import { SUPER_ADMIN_ROLES } from "../router.js";
 
 function peso(n) {
   const x = Number(n || 0);
@@ -266,7 +265,7 @@ export async function renderApprovals(appEl, ctx) {
 
   async function load() {
     msg.textContent = "Loading...";
-    list.innerHTML = `<tr><td colspan="6" class="muted">Loading...</td></tr>`;
+    list.innerHTML = `<tr><td colspan="6" class="loading-state"><span class="spinner spinner-sm"></span> Loading approvals&hellip;</td></tr>`;
 
     const nowIso = new Date().toISOString();
     let query = supabase

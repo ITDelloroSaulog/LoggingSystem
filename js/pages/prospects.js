@@ -370,27 +370,35 @@ export async function renderProspects(appEl, ctx) {
       <div class="muted prospect-section-sub">
         ${touchpoints.length} logged | target ${Number(p.touchpoint_target || 5)}
       </div>
-      <div class="table-wrap prospect-table-wrap" style="margin-bottom:8px">
-        <table class="prospect-table prospect-table-touchpoints">
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Type</th>
-              <th>Meeting</th>
-              <th>Notes</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${touchpoints.length ? touchpoints.map((t) => `
-              <tr>
-                <td>${escapeHtml(fmtDateTime(t.occurred_at))}</td>
-                <td>${escapeHtml(clean(t.touchpoint_type))}</td>
-                <td>${t.is_meeting ? "Yes" : "No"}</td>
-                <td>${escapeHtml(clean(t.notes) || "-")}</td>
-              </tr>
-            `).join("") : `<tr><td colspan="4" class="muted">No touchpoints yet.</td></tr>`}
-          </tbody>
-        </table>
+      <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:12px;">
+        ${touchpoints.length ? touchpoints.map((t, idx) => `
+          <div class="tracker-card" style="margin-bottom:0px; border:1px solid #e2e8f0; box-shadow:none;">
+            <div class="tracker-card-header" style="background:#f8fafc; padding:8px 16px;">
+              <strong style="color:#334155; font-size:13px;">Touchpoint #${idx + 1}</strong>
+            </div>
+            <div class="tracker-card-body" style="padding:12px 16px;">
+              <div class="tracker-card-fields" style="grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));">
+                <div class="tracker-field">
+                  <span class="tracker-field-label">Date</span>
+                  <div style="font-size:14px;">${escapeHtml(fmtDateTime(t.occurred_at))}</div>
+                </div>
+                <div class="tracker-field">
+                  <span class="tracker-field-label">Type</span>
+                  <div style="font-size:14px;">${escapeHtml(clean(t.touchpoint_type))}</div>
+                </div>
+                <div class="tracker-field">
+                  <span class="tracker-field-label">Meeting?</span>
+                  <div>${t.is_meeting ? `<span class="status-pill completed">Yes</span>` : `<span class="status-pill draft">No</span>`}</div>
+                </div>
+                ${t.notes ? `
+                <div class="tracker-field tracker-field-wide">
+                  <span class="tracker-field-label">Notes</span>
+                  <div style="font-size:13px; color:#334155;">${escapeHtml(clean(t.notes))}</div>
+                </div>` : ""}
+              </div>
+            </div>
+          </div>
+        `).join("") : `<div class="muted">No touchpoints yet.</div>`}
       </div>
       <div class="prospect-form-row prospect-form-row--touchpoint" style="margin-bottom:6px">
         <div>
@@ -423,33 +431,43 @@ export async function renderProspects(appEl, ctx) {
       <div class="muted prospect-section-sub">
         Pre-acquisition spend: <strong>P${fmtPeso(acquisitionCost(costs, p.acquired_at))}</strong>
       </div>
-      <div class="table-wrap prospect-table-wrap" style="margin-bottom:8px">
-        <table class="prospect-table prospect-table-costs">
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Cost Type</th>
-              <th>Amount</th>
-              <th>Receipt</th>
-              <th>Notes</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${costs.length ? costs.map((c) => `
-              <tr>
-                <td>${escapeHtml(fmtDateTime(c.occurred_at))}</td>
-                <td>${escapeHtml(clean(c.cost_type))}</td>
-                <td>P${fmtPeso(c.amount)}</td>
-                <td>
-                  ${Array.isArray(c.attachment_urls) && c.attachment_urls.length
-                    ? c.attachment_urls.map((path, idx) => `<a href="#" class="openCostFile" data-idx="${idx}" data-id="${c.id}">File ${idx + 1}</a>`).join("<br/>")
-                    : "<span class='muted'>-</span>"}
-                </td>
-                <td>${escapeHtml(clean(c.notes) || "-")}</td>
-              </tr>
-            `).join("") : `<tr><td colspan="5" class="muted">No cost entries yet.</td></tr>`}
-          </tbody>
-        </table>
+      <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:12px;">
+        ${costs.length ? costs.map((c, idx) => `
+          <div class="tracker-card" style="margin-bottom:0px; border:1px solid #e2e8f0; box-shadow:none;">
+            <div class="tracker-card-header" style="background:#f8fafc; padding:8px 16px;">
+              <strong style="color:#334155; font-size:13px;">Cost Entry #${idx + 1}</strong>
+            </div>
+            <div class="tracker-card-body" style="padding:12px 16px;">
+              <div class="tracker-card-fields" style="grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));">
+                <div class="tracker-field">
+                  <span class="tracker-field-label">Date</span>
+                  <div style="font-size:14px;">${escapeHtml(fmtDateTime(c.occurred_at))}</div>
+                </div>
+                <div class="tracker-field">
+                  <span class="tracker-field-label">Cost Type</span>
+                  <div style="font-size:14px;">${escapeHtml(clean(c.cost_type))}</div>
+                </div>
+                <div class="tracker-field">
+                  <span class="tracker-field-label">Amount</span>
+                  <strong style="font-size:14px; color:#1e293b;">P${fmtPeso(c.amount)}</strong>
+                </div>
+                <div class="tracker-field">
+                  <span class="tracker-field-label">Receipt</span>
+                  <div>
+                    ${Array.isArray(c.attachment_urls) && c.attachment_urls.length
+        ? c.attachment_urls.map((path, fileIdx) => `<a href="#" class="openCostFile" data-idx="${fileIdx}" data-id="${c.id}">File ${fileIdx + 1}</a>`).join("<br/>")
+        : "<span class='muted'>-</span>"}
+                  </div>
+                </div>
+                ${c.notes ? `
+                <div class="tracker-field tracker-field-wide">
+                  <span class="tracker-field-label">Notes</span>
+                  <div style="font-size:13px; color:#334155;">${escapeHtml(clean(c.notes))}</div>
+                </div>` : ""}
+              </div>
+            </div>
+          </div>
+        `).join("") : `<div class="muted">No cost entries yet.</div>`}
       </div>
       <div class="prospect-form-row prospect-form-row--cost" style="margin-bottom:6px">
         <div>
@@ -492,8 +510,8 @@ export async function renderProspects(appEl, ctx) {
           </div>
           <div style="margin-top:8px">
             ${signedFiles.length
-              ? signedFiles.map((path, idx) => `<a href="#" class="openSignedFile" data-idx="${idx}">Signed File ${idx + 1}</a>`).join("<br/>")
-              : "<span class='muted'>No signed file listed.</span>"}
+          ? signedFiles.map((path, idx) => `<a href="#" class="openSignedFile" data-idx="${idx}">Signed File ${idx + 1}</a>`).join("<br/>")
+          : "<span class='muted'>No signed file listed.</span>"}
           </div>
         </div>
       ` : `
@@ -730,7 +748,7 @@ export async function renderProspects(appEl, ctx) {
 
   async function loadData() {
     msgEl.textContent = "Loading prospects...";
-    listEl.innerHTML = `<div class="muted">Loading...</div>`;
+    listEl.innerHTML = `<div class="loading-state"><span class="spinner spinner-sm"></span> Loading prospects&hellip;</div>`;
 
     const [prosRes, lawRows] = await Promise.all([
       supabase
@@ -755,17 +773,17 @@ export async function renderProspects(appEl, ctx) {
     const [touchRes, costRes, accRes] = await Promise.all([
       prospectIds.length
         ? supabase
-            .from("prospect_touchpoints")
-            .select("id,prospect_id,occurred_at,touchpoint_type,notes,is_meeting")
-            .in("prospect_id", prospectIds)
-            .order("occurred_at", { ascending: false })
+          .from("prospect_touchpoints")
+          .select("id,prospect_id,occurred_at,touchpoint_type,notes,is_meeting")
+          .in("prospect_id", prospectIds)
+          .order("occurred_at", { ascending: false })
         : Promise.resolve({ data: [], error: null }),
       prospectIds.length
         ? supabase
-            .from("prospect_cost_entries")
-            .select("id,prospect_id,occurred_at,cost_type,amount,attachment_urls,notes,receipt_required")
-            .in("prospect_id", prospectIds)
-            .order("occurred_at", { ascending: false })
+          .from("prospect_cost_entries")
+          .select("id,prospect_id,occurred_at,cost_type,amount,attachment_urls,notes,receipt_required")
+          .in("prospect_id", prospectIds)
+          .order("occurred_at", { ascending: false })
         : Promise.resolve({ data: [], error: null }),
       accountIds.length
         ? supabase.from("accounts").select("id,title,category").in("id", accountIds)

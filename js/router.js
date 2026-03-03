@@ -4,7 +4,8 @@ export const STAFF_ROLES = ["lawyer", "accountant", "staff_encoder", ...SUPER_AD
 const routes = [
   { path: "#/dashboard", roles: STAFF_ROLES, modulePath: "./pages/dashboard.js", exportName: "renderDashboard" },
   { path: "#/tracker", roles: STAFF_ROLES, modulePath: "./pages/trackerHub.js", exportName: "renderTrackerHub" },
-  { path: "#/activities", roles: STAFF_ROLES, modulePath: "./pages/logActivity.js", exportName: "renderLogActivity" },
+  { path: "#/activities", roles: STAFF_ROLES, modulePath: "./pages/activities.js", exportName: "renderActivities" },
+  { path: "#/log", roles: STAFF_ROLES, modulePath: "./pages/logActivity.js", exportName: "renderLogActivity" },
   { path: "#/prospects", roles: STAFF_ROLES, modulePath: "./pages/prospects.js", exportName: "renderProspects" },
   { path: "#/accounts", roles: STAFF_ROLES, modulePath: "./pages/accounts.js", exportName: "renderAccounts" },
   { path: "#/reports", roles: STAFF_ROLES, modulePath: "./pages/reports.js", exportName: "renderReports" },

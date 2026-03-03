@@ -337,20 +337,49 @@ export async function renderReports(appEl) {
   }
 
   function renderTypeLegend(rows) {
+    const typePie = $("#typePie");
     const typeMap = new Map();
     rows.forEach((r) => {
       const key = r.task_category || "Other";
       typeMap.set(key, (typeMap.get(key) || 0) + Number(r.amount || 0));
     });
-    const items = Array.from(typeMap.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const items = Array.from(typeMap.entries()).sort((a, b) => b[1] - a[1]).slice(0, 6);
 
     if (!items.length) {
       typeLegend.innerHTML = "No activity type data.";
+      if (typePie) typePie.style.background = "var(--border)";
       return;
     }
 
+    const COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#6b7280"];
+    const total = items.reduce((s, [, v]) => s + v, 0);
+
+    // Build conic gradient stops
+    let cumPercent = 0;
+    const stops = items.map(([, value], i) => {
+      const start = cumPercent;
+      const pct = total ? (value / total) * 100 : 0;
+      cumPercent += pct;
+      return `${COLORS[i % COLORS.length]} ${start.toFixed(2)}% ${cumPercent.toFixed(2)}%`;
+    });
+
+    if (typePie) {
+      typePie.style.width = "160px";
+      typePie.style.height = "160px";
+      typePie.style.borderRadius = "50%";
+      typePie.style.background = `conic-gradient(${stops.join(", ")})`;
+      typePie.style.margin = "0 auto 12px";
+      typePie.style.boxShadow = "0 2px 8px rgba(0,0,0,0.08)";
+    }
+
     typeLegend.innerHTML = items
-      .map(([name, value]) => `<div>${escapeHtml(name)}: <strong>P${asPeso(value)}</strong></div>`)
+      .map(([name, value], i) => {
+        const pct = total ? ((value / total) * 100).toFixed(1) : "0.0";
+        return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${COLORS[i % COLORS.length]};flex-shrink:0"></span>
+          <span>${escapeHtml(name)}: <strong>P${asPeso(value)}</strong> (${pct}%)</span>
+        </div>`;
+      })
       .join("");
   }
 
@@ -574,9 +603,9 @@ export async function renderReports(appEl) {
     const [costRes, lawyerRes] = await Promise.all([
       prospectIds.length
         ? supabase
-            .from("prospect_cost_entries")
-            .select("prospect_id,occurred_at,amount")
-            .in("prospect_id", prospectIds)
+          .from("prospect_cost_entries")
+          .select("prospect_id,occurred_at,amount")
+          .in("prospect_id", prospectIds)
         : Promise.resolve({ data: [], error: null }),
       lawyerIds.length
         ? supabase.from("profiles").select("id,full_name,email").in("id", lawyerIds)
@@ -611,11 +640,11 @@ export async function renderReports(appEl) {
 
     acqProspectTable.innerHTML = detailed.length
       ? detailed
-          .slice(0, 50)
-          .map((p) => {
-            const lawyer = lawyerById.get(p.assigned_lawyer_id);
-            const lawyerName = lawyer ? (lawyer.full_name || lawyer.email || lawyer.id) : "Unassigned";
-            return `
+        .slice(0, 50)
+        .map((p) => {
+          const lawyer = lawyerById.get(p.assigned_lawyer_id);
+          const lawyerName = lawyer ? (lawyer.full_name || lawyer.email || lawyer.id) : "Unassigned";
+          return `
               <tr>
                 <td>${escapeHtml(p.prospect_name || "-")}</td>
                 <td>${escapeHtml(p.stage || "-")}</td>
@@ -623,8 +652,8 @@ export async function renderReports(appEl) {
                 <td><strong>P${asPeso(p.spend)}</strong></td>
               </tr>
             `;
-          })
-          .join("")
+        })
+        .join("")
       : `<tr><td colspan="4" class="muted">No prospect rows found.</td></tr>`;
 
     const byLawyer = new Map();
@@ -697,9 +726,9 @@ export async function renderReports(appEl) {
         : Promise.resolve({ data: [], error: null }),
       matterIds.length
         ? supabase
-            .from("matters")
-            .select("id,matter_type,official_case_no,special_engagement_code,retainer_contract_ref,retainer_period_yyyymm")
-            .in("id", matterIds)
+          .from("matters")
+          .select("id,matter_type,official_case_no,special_engagement_code,retainer_contract_ref,retainer_period_yyyymm")
+          .in("id", matterIds)
         : Promise.resolve({ data: [], error: null }),
     ]);
 

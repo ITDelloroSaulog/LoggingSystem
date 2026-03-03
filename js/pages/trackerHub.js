@@ -312,8 +312,8 @@ export async function renderTrackerHub(appEl, ctx) {
   let lastTotalPages = 1;
   let renderVersion = 0;
 
-  const visibleMatterRows = () => Array.from(bodyEl.querySelectorAll("tr[data-kind='matter']"));
-  const dirtyRows = () => visibleMatterRows().filter((tr) => tr.classList.contains("is-dirty"));
+  const visibleMatterRows = () => Array.from(bodyEl.querySelectorAll(".tracker-card[data-kind='matter']"));
+  const dirtyRows = () => visibleMatterRows().filter((card) => card.classList.contains("is-dirty"));
   function markDirty(tr, dirty = true) {
     if (!tr || !tr.classList) return;
     tr.classList.toggle("is-dirty", !!dirty);
@@ -341,15 +341,8 @@ export async function renderTrackerHub(appEl, ctx) {
       headEl.innerHTML = `<tr><th>Seq</th><th>Client</th><th>Legacy Matter</th><th>Status</th><th>Identifier Preview</th><th>Occurred</th><th>Convert</th></tr>`;
       return;
     }
-    if (currentTab === TAB_LITIGATION) {
-      headEl.innerHTML = `<tr><th>Seq</th><th>Company Name</th><th>Personal / Representative</th><th>Case Number</th><th>Internal Case Code</th><th>Case Title</th><th>Venue</th><th>Case Type</th><th>Status</th><th>Handling Lawyer</th><th>Engagement PDF</th><th>Activity Summary</th><th>Action</th></tr>`;
-      return;
-    }
-    if (currentTab === TAB_SPECIAL) {
-      headEl.innerHTML = `<tr><th>Seq</th><th>Company Name</th><th>Personal / Representative</th><th>Special Engagement Code</th><th>Date of Engagement</th><th>Acceptance Fee</th><th>Engagement Description</th><th>Tracker Link</th><th>Status</th><th>Handling Lawyer</th><th>Engagement PDF</th><th>Activity Summary</th><th>Action</th></tr>`;
-      return;
-    }
-    headEl.innerHTML = `<tr><th>Seq</th><th>Company Name</th><th>Personal / Representative</th><th>Contract Ref</th><th>Period YYYYMM</th><th>Title</th><th>Status</th><th>Handling Lawyer</th><th>Meeting Quota</th><th>OPEX Summary</th><th>Engagement PDF</th><th>Action</th></tr>`;
+    // Card layout — no table headers needed for structured rows
+    headEl.innerHTML = "";
   }
 
   function renderDocCell(matterId) {
@@ -503,7 +496,7 @@ export async function renderTrackerHub(appEl, ctx) {
   }
   function refreshVisibleRetainerQuotaCells(rows) {
     for (const m of rows || []) {
-      const tr = bodyEl.querySelector(`tr[data-kind="matter"][data-id="${m.id}"]`);
+      const tr = bodyEl.querySelector(`.tracker-card[data-kind="matter"][data-id="${m.id}"]`);
       if (!tr) continue;
       const quotaCell = tr.querySelector(".quota-cell");
       if (quotaCell) quotaCell.innerHTML = renderRetainerQuotaCell(m.id);
@@ -517,38 +510,204 @@ export async function renderTrackerHub(appEl, ctx) {
         if (currentTab !== TAB_RETAINER) return;
         refreshVisibleRetainerQuotaCells(rows);
       })
-      .catch(() => {});
+      .catch(() => { });
   }
   function renderMatterRows(rows, seqOffset = 0) {
-    if (!rows.length) { bodyEl.innerHTML = `<tr><td colspan="13" class="muted">No structured rows found.</td></tr>`; return; }
+    if (!rows.length) {
+      bodyEl.innerHTML = `<tr><td colspan="13" class="muted">No structured rows found.</td></tr>`;
+      return;
+    }
+    // Use card layout — render inside a wrapper div that replaces tbody content
+    const container = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 13;
+    td.style.padding = "0";
+    td.style.border = "none";
+    container.appendChild(td);
+
     if (currentTab === TAB_LITIGATION) {
-      bodyEl.innerHTML = rows.map((m, idx) => `<tr data-kind="matter" data-id="${m.id}"><td class="tracker-seq">${seqOffset + idx + 1}</td><td><input class="f-company" value="${escapeHtml(clean(m.company_name))}" /></td><td><input class="f-personal" value="${escapeHtml(clean(m.personal_name))}" /></td><td><input class="f-official" value="${escapeHtml(clean(m.official_case_no))}" /></td><td><input class="f-internal" value="${escapeHtml(clean(m.internal_case_code))}" /></td><td><input class="f-title" value="${escapeHtml(clean(m.title))}" /></td><td><input class="f-venue" value="${escapeHtml(clean(m.venue))}" /></td><td><select class="f-case-type">${rowCaseTypeOptions(m.case_type)}</select></td><td><select class="f-status">${rowStatusOptions(m.status)}</select></td><td><select class="f-lawyer">${lawyerOptions(lawyers, m.handling_lawyer_id)}</select></td><td>${renderDocCell(m.id)}</td><td class="summary-cell">${renderSummaryCell(m.id)}</td><td>${renderActionCell(m.id)}</td></tr>`).join("");
-      return;
-    }
-    if (currentTab === TAB_SPECIAL) {
-      bodyEl.innerHTML = rows.map((m, idx) => {
+      td.innerHTML = rows.map((m, idx) => `
+        <div class="tracker-card" data-kind="matter" data-id="${m.id}">
+          <div class="tracker-card-header">
+            <span class="tracker-card-seq">${seqOffset + idx + 1}</span>
+            <span class="tracker-card-id">${escapeHtml(clean(m.internal_case_code) || clean(m.official_case_no) || "No Case #")}</span>
+            <span class="${statusPillClass(matterSummary(m.id).latest_status)}">${escapeHtml(clean(matterSummary(m.id).latest_status) || "draft")}</span>
+            <span class="tracker-card-actions">${renderActionCell(m.id)}</span>
+          </div>
+          <div class="tracker-card-body">
+            <div class="tracker-card-fields">
+              <label class="tracker-field">
+                <span class="tracker-field-label">Company Name</span>
+                <input class="f-company" value="${escapeHtml(clean(m.company_name))}" />
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Personal / Representative</span>
+                <input class="f-personal" value="${escapeHtml(clean(m.personal_name))}" />
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Case Number</span>
+                <input class="f-official" value="${escapeHtml(clean(m.official_case_no))}" />
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Internal Code</span>
+                <input class="f-internal" value="${escapeHtml(clean(m.internal_case_code))}" />
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Case Title</span>
+                <input class="f-title" value="${escapeHtml(clean(m.title))}" />
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Venue</span>
+                <input class="f-venue" value="${escapeHtml(clean(m.venue))}" />
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Case Type</span>
+                <select class="f-case-type">${rowCaseTypeOptions(m.case_type)}</select>
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Status</span>
+                <select class="f-status">${rowStatusOptions(m.status)}</select>
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Handling Lawyer</span>
+                <select class="f-lawyer">${lawyerOptions(lawyers, m.handling_lawyer_id)}</select>
+              </label>
+            </div>
+            <div class="tracker-card-sidebar">
+              <div class="tracker-card-section">
+                <span class="tracker-field-label">Engagement PDF</span>
+                ${renderDocCell(m.id)}
+              </div>
+              <div class="tracker-card-section">
+                <span class="tracker-field-label">Activity Summary</span>
+                <div class="summary-cell">${renderSummaryCell(m.id)}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `).join("");
+    } else if (currentTab === TAB_SPECIAL) {
+      td.innerHTML = rows.map((m, idx) => {
         const acceptance = acceptanceFeeForMatter(m.id);
-        return `<tr data-kind="matter" data-id="${m.id}">
-          <td class="tracker-seq">${seqOffset + idx + 1}</td>
-          <td><input class="f-company" value="${escapeHtml(clean(m.company_name))}" /></td>
-          <td><input class="f-personal" value="${escapeHtml(clean(m.personal_name))}" /></td>
-          <td><input class="f-special-code" value="${escapeHtml(clean(m.special_engagement_code))}" /></td>
-          <td><input class="f-opened-at" type="date" value="${escapeHtml(clean(m.opened_at).slice(0, 10))}" /></td>
-          <td><input class="f-acceptance-fee" type="number" min="0" step="0.01" value="${acceptance > 0 ? Number(acceptance).toFixed(2) : ""}" placeholder="0.00" /></td>
-          <td><input class="f-engagement-description" value="${escapeHtml(clean(m.engagement_description || m.title))}" /></td>
-          <td>${renderTrackerLinkCell(m)}</td>
-          <td><select class="f-status">${rowStatusOptions(m.status)}</select></td>
-          <td><select class="f-lawyer">${lawyerOptions(lawyers, m.handling_lawyer_id)}</select></td>
-          <td>${renderDocCell(m.id)}</td>
-          <td class="summary-cell">${renderSummaryCell(m.id)}</td>
-          <td>${renderActionCell(m.id)}</td>
-        </tr>`;
+        return `
+        <div class="tracker-card" data-kind="matter" data-id="${m.id}">
+          <div class="tracker-card-header">
+            <span class="tracker-card-seq">${seqOffset + idx + 1}</span>
+            <span class="tracker-card-id">${escapeHtml(clean(m.special_engagement_code) || "No Code")}</span>
+            ${renderTrackerLinkCell(m)}
+            <span class="${statusPillClass(matterSummary(m.id).latest_status)}">${escapeHtml(clean(matterSummary(m.id).latest_status) || "draft")}</span>
+            <span class="tracker-card-actions">${renderActionCell(m.id)}</span>
+          </div>
+          <div class="tracker-card-body">
+            <div class="tracker-card-fields">
+              <label class="tracker-field">
+                <span class="tracker-field-label">Company Name</span>
+                <input class="f-company" value="${escapeHtml(clean(m.company_name))}" />
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Personal / Representative</span>
+                <input class="f-personal" value="${escapeHtml(clean(m.personal_name))}" />
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Engagement Code</span>
+                <input class="f-special-code" value="${escapeHtml(clean(m.special_engagement_code))}" />
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Date of Engagement</span>
+                <input class="f-opened-at" type="date" value="${escapeHtml(clean(m.opened_at).slice(0, 10))}" />
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Acceptance Fee</span>
+                <input class="f-acceptance-fee" type="number" min="0" step="0.01" value="${acceptance > 0 ? Number(acceptance).toFixed(2) : ""}" placeholder="0.00" />
+              </label>
+              <label class="tracker-field tracker-field-wide">
+                <span class="tracker-field-label">Engagement Description</span>
+                <input class="f-engagement-description" value="${escapeHtml(clean(m.engagement_description || m.title))}" />
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Status</span>
+                <select class="f-status">${rowStatusOptions(m.status)}</select>
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Handling Lawyer</span>
+                <select class="f-lawyer">${lawyerOptions(lawyers, m.handling_lawyer_id)}</select>
+              </label>
+            </div>
+            <div class="tracker-card-sidebar">
+              <div class="tracker-card-section">
+                <span class="tracker-field-label">Engagement PDF</span>
+                ${renderDocCell(m.id)}
+              </div>
+              <div class="tracker-card-section">
+                <span class="tracker-field-label">Activity Summary</span>
+                <div class="summary-cell">${renderSummaryCell(m.id)}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
       }).join("");
-      return;
+    } else {
+      // Retainer tab
+      td.innerHTML = rows.map((m, idx) => `
+        <div class="tracker-card" data-kind="matter" data-id="${m.id}">
+          <div class="tracker-card-header">
+            <span class="tracker-card-seq">${seqOffset + idx + 1}</span>
+            <span class="tracker-card-id">${escapeHtml(clean(m.retainer_contract_ref) || clean(m.title) || "No Ref")}</span>
+            <span class="${statusPillClass(matterSummary(m.id).latest_status)}">${escapeHtml(clean(matterSummary(m.id).latest_status) || "draft")}</span>
+            <span class="tracker-card-actions">${renderActionCell(m.id)}</span>
+          </div>
+          <div class="tracker-card-body">
+            <div class="tracker-card-fields">
+              <label class="tracker-field">
+                <span class="tracker-field-label">Company Name</span>
+                <input class="f-company" value="${escapeHtml(clean(m.company_name))}" />
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Personal / Representative</span>
+                <input class="f-personal" value="${escapeHtml(clean(m.personal_name))}" />
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Contract Ref</span>
+                <input class="f-contract-ref" value="${escapeHtml(clean(m.retainer_contract_ref))}" />
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Period YYYYMM</span>
+                <input class="f-period" type="number" min="190001" max="299912" value="${Number(m.retainer_period_yyyymm || 0) || ""}" />
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Title</span>
+                <input class="f-title" value="${escapeHtml(clean(m.title))}" />
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Status</span>
+                <select class="f-status">${rowStatusOptions(m.status)}</select>
+              </label>
+              <label class="tracker-field">
+                <span class="tracker-field-label">Handling Lawyer</span>
+                <select class="f-lawyer">${lawyerOptions(lawyers, m.handling_lawyer_id)}</select>
+              </label>
+            </div>
+            <div class="tracker-card-sidebar">
+              <div class="tracker-card-section">
+                <span class="tracker-field-label">Meeting Quota</span>
+                <div class="quota-cell">${renderRetainerQuotaCell(m.id)}</div>
+              </div>
+              <div class="tracker-card-section">
+                <span class="tracker-field-label">OPEX Summary</span>
+                <div class="opex-cell">${renderRetainerOpexCell(m.id)}</div>
+              </div>
+              <div class="tracker-card-section">
+                <span class="tracker-field-label">Engagement PDF</span>
+                ${renderDocCell(m.id)}
+              </div>
+            </div>
+          </div>
+        </div>
+      `).join("");
     }
-    bodyEl.innerHTML = rows.map((m, idx) => {
-      return `<tr data-kind="matter" data-id="${m.id}"><td class="tracker-seq">${seqOffset + idx + 1}</td><td><input class="f-company" value="${escapeHtml(clean(m.company_name))}" /></td><td><input class="f-personal" value="${escapeHtml(clean(m.personal_name))}" /></td><td><input class="f-contract-ref" value="${escapeHtml(clean(m.retainer_contract_ref))}" /></td><td><input class="f-period" type="number" min="190001" max="299912" value="${Number(m.retainer_period_yyyymm || 0) || ""}" /></td><td><input class="f-title" value="${escapeHtml(clean(m.title))}" /></td><td><select class="f-status">${rowStatusOptions(m.status)}</select></td><td><select class="f-lawyer">${lawyerOptions(lawyers, m.handling_lawyer_id)}</select></td><td class="quota-cell">${renderRetainerQuotaCell(m.id)}</td><td class="opex-cell">${renderRetainerOpexCell(m.id)}</td><td>${renderDocCell(m.id)}</td><td>${renderActionCell(m.id)}</td></tr>`;
-    }).join("");
+    bodyEl.innerHTML = "";
+    bodyEl.appendChild(container);
   }
 
   function renderLegacyRows(rows, seqOffset = 0) {
@@ -1511,31 +1670,31 @@ export async function renderTrackerHub(appEl, ctx) {
     tabsEl.querySelectorAll(".tracker-tab").forEach((x) => x.classList.toggle("active", x === btn));
     await render();
   });
-  bodyEl.addEventListener("input", (e) => { const tr = e.target.closest("tr[data-kind='matter']"); if (tr) markDirty(tr, true); });
+  bodyEl.addEventListener("input", (e) => { const tr = e.target.closest(".tracker-card[data-kind='matter']"); if (tr) markDirty(tr, true); });
   bodyEl.addEventListener("change", async (e) => {
-    const tr = e.target.closest("tr[data-kind='matter']");
+    const tr = e.target.closest(".tracker-card[data-kind='matter']");
     if (tr) markDirty(tr, true);
     const fileInput = e.target.closest(".doc-file");
-    if (fileInput) { const row = fileInput.closest("tr[data-kind='matter']"); if (row) await uploadDoc(row, fileInput); }
+    if (fileInput) { const row = fileInput.closest(".tracker-card[data-kind='matter']"); if (row) await uploadDoc(row, fileInput); }
   });
   bodyEl.addEventListener("click", async (e) => {
     const saveBtn = e.target.closest(".save-row");
-    if (saveBtn) { const tr = saveBtn.closest("tr[data-kind='matter']"); if (tr) await saveMatterRow(tr); return; }
+    if (saveBtn) { const tr = saveBtn.closest(".tracker-card[data-kind='matter']"); if (tr) await saveMatterRow(tr); return; }
     const archiveBtn = e.target.closest(".archive-row");
-    if (archiveBtn) { const tr = archiveBtn.closest("tr[data-kind='matter']"); if (tr) await archiveMatter(tr); return; }
+    if (archiveBtn) { const tr = archiveBtn.closest(".tracker-card[data-kind='matter']"); if (tr) await archiveMatter(tr); return; }
     const miscBtn = e.target.closest(".add-misc");
-    if (miscBtn) { const tr = miscBtn.closest("tr[data-kind='matter']"); if (tr) await addMisc(tr); return; }
+    if (miscBtn) { const tr = miscBtn.closest(".tracker-card[data-kind='matter']"); if (tr) await addMisc(tr); return; }
     const entriesBtn = e.target.closest(".open-matter-entries");
     if (entriesBtn) {
-      const matterId = clean(entriesBtn.dataset.id || entriesBtn.closest("tr[data-kind='matter']")?.dataset.id);
+      const matterId = clean(entriesBtn.dataset.id || entriesBtn.closest(".tracker-card[data-kind='matter']")?.dataset.id);
       const matter = matters.find((x) => String(x.id) === String(matterId));
       if (matter) await openMatterEntriesModal(matter);
       return;
     }
     const uploadBtn = e.target.closest(".upload-doc");
-    if (uploadBtn) { const tr = uploadBtn.closest("tr[data-kind='matter']"); tr?.querySelector(".doc-file")?.click(); return; }
+    if (uploadBtn) { const tr = uploadBtn.closest(".tracker-card[data-kind='matter']"); tr?.querySelector(".doc-file")?.click(); return; }
     const clearBtn = e.target.closest(".clear-doc");
-    if (clearBtn) { const tr = clearBtn.closest("tr[data-kind='matter']"); if (tr) await clearDocs(tr); return; }
+    if (clearBtn) { const tr = clearBtn.closest(".tracker-card[data-kind='matter']"); if (tr) await clearDocs(tr); return; }
     const docLink = e.target.closest(".doc-link");
     if (docLink) {
       e.preventDefault();

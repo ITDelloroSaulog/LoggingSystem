@@ -230,9 +230,9 @@ export async function renderAccounts(appEl, ctx, navigate) {
       const last = s.lastActivity ? new Date(s.lastActivity).toLocaleDateString() : "-";
       const actionCell = isAdmin
         ? `<td>${a.is_archived
-            ? `<button class="btn toggleArchive" data-id="${a.id}" data-action="unarchive">Unarchive</button>`
-            : `<button class="btn btn-danger toggleArchive" data-id="${a.id}" data-action="archive">Archive</button>`
-          }</td>`
+          ? `<button class="btn toggleArchive" data-id="${a.id}" data-action="unarchive">Unarchive</button>`
+          : `<button class="btn btn-danger toggleArchive" data-id="${a.id}" data-action="archive">Archive</button>`
+        }</td>`
         : "";
       return `
         <tr data-id="${a.id}" class="clickable">
@@ -272,7 +272,7 @@ export async function renderAccounts(appEl, ctx, navigate) {
 
   async function load() {
     msg.textContent = "Loading...";
-    tableBody.innerHTML = `<tr><td colspan="6" class="muted">Loading...</td></tr>`;
+    tableBody.innerHTML = `<tr><td colspan="6" class="loading-state"><span class="spinner spinner-sm"></span> Loading accounts&hellip;</td></tr>`;
 
     const { data, error } = await supabase
       .from("accounts")
